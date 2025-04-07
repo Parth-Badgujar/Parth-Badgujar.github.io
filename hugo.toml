@@ -1,0 +1,7 @@
+baseURL = 'https://parth-badgujar.github.io/'
+languageCode = 'en-us'
+title = 'My New Hugo Site'
+theme = 'PaperMod'
+[caches]
+  [caches.images]
+    dir = ':cacheDir/images'
