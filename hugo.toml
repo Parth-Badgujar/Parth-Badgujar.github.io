@@ -1,7 +1,56 @@
 baseURL = 'https://parth-badgujar.github.io/'
 languageCode = 'en-us'
-title = 'My New Hugo Site'
+title = 'P3g4su5'
 theme = 'PaperMod'
 [caches]
   [caches.images]
     dir = ':cacheDir/images'
+
+[params]
+mainSections = [ ]
+
+[params.label]
+  icon = "dp-mask.png"
+  iconHeight = 35
+
+[params.assets]
+  favicon = "favicon.ico"
+
+[[menu.main]]
+identifier = "about"
+name = "About"
+url = "/about/"
+weight = 1
+
+[[menu.main]]
+identifier = "blogs"
+name = "Blogs"
+url = "/blogs/"
+weight = 4
+
+[[menu.main]]
+identifier = "ctf-writeups"
+name = "CTF Writeups"
+url = "/writeups/"
+weight = 4
+
+[[menu.main]]
+identifier = "projects"
+name = "Projects"
+url = "/projects/"
+weight = 2
+
+[[menu.main]]
+identifier = "publications"
+name = "Publications"
+url = "/publications/"
+weight = 3
+
+[[menu.main]]
+identifier = "search"
+name = "Search"
+url = "/search/"
+weight = 4
+
+
+
