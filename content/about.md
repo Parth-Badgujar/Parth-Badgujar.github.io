@@ -5,18 +5,81 @@ showToc: false
 summary: "About me."
 ---
 
+{{< rawhtml >}}
 
-### 👋 Hello, I'm Parth Badgujar aka `P3g4su5`
+<style>
+.about-container {
+  display: flex;
+  align-items: flex-start; /* align top edges of image+caption and text */
+  gap: 40px;               /* space between image and text */
+}
 
-I'm a third-year undergraduate student in [**Electronics and Communication Engineering**](https://ece.iitr.ac.in) at [**IIT Roorkee**](https://www.iitr.ac.in).
+.profile-card {
+  flex: 0 0 250px;         /* fix width for left column */
+  text-align: center;
+}
 
-I’m also a core member of [**Data Science Group IITR**](https://dsgiitr.in/) and an active CTF player in [**InfoSecIITR**](https://infoseciitr.in). My interests are :
+.profile-pic {
+  width: 250px;
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+  margin: 0 auto;
+}
 
-- **Diffusion models** and **generative data modeling**  
-- **AI security**, adversarial attacks, and robust ML systems  
-- **CUDA** and **Triton kernel** development
-- **Distributed inference/training**  
-- **Binary exploitation** and **Linux Kernel exploitation**
+.caption h3 {
+  margin: 12px 0 6px;
+  font-weight: 700;
+  font-size: 22px;
+}
+.caption p {
+  margin: 0;
+  color: #555;
+}
 
-I enjoy working on problems that blend deep learning with low-level performance and security — building systems that are both intelligent and resilient.
+.text-column {
+  flex: 1;                 /* right column takes remaining space */
+}
 
+@media (max-width: 700px) {
+  .about-container {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+  .text-column {
+    text-align: left;      /* keep text normal */
+  }
+}
+</style>
+
+<div class="about-container">
+  <div class="profile-card">
+    <img src="/parth.png" alt="Profile picture" class="profile-pic">
+    <div class="caption">
+      <h3>Parth Badgujar</h3>
+        <small>B.Tech. in Electronics and Communication Engineering at IIT Roorkee</small>
+    </div>
+  </div>
+
+  <div class="text-column">
+{{< /rawhtml >}}
+
+Hi, I am Parth
+  
+
+I'm final year undergrad at IIT Roorkee majoring in <a href="https://ece.iitr.ac.in">Electronics and Communication Engineering</a>. My interests span `AI Security`, `Diffusion Models`, `ML Systems` and `Systems Security`. 
+ 
+I am associated with {{<rawhtml>}}<a href="https://dsgiitr.in/" style="color: blue;">Data Science Group</a>{{</rawhtml>}} at IIT Roorkee, where we build projects and research at the frontier of AI. 
+ 
+Having an electronics background I enjoy fiddling with low level systems with hands on experience in optimizing <code>CUDA</code> / <code>Triton</code> kernels.
+ 
+I am an active CTF player with {{<rawhtml>}} <a href="https://ctftime.org/team/16691/" style="color: blue;">InfoSecIITR</a> {{</rawhtml>}} (CTF team from IIT Roorkee) where I work on binary and linux kernel exploitation.  
+
+Apart from my main quests I enjoy studying about rockets and airplanes.
+
+{{< rawhtml >}}
+  </div>
+</div>
+{{< /rawhtml >}}

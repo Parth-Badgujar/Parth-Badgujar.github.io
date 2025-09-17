@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en" dir="auto">
+
+<head><script src="/livereload.js?mindelay=10&amp;v=2&amp;port=1313&amp;path=livereload" data-no-instant defer></script><meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+<meta name="robots" content="noindex, nofollow">
+<title>Speeding Up Diffusion Models | Parth&#39;s Blog</title>
+<meta name="keywords" content="diffusion, computer vision, generative ai">
+<meta name="description" content="describing and implementing caching mechanism for diffusion models">
+<meta name="author" content="">
+<link rel="canonical" href="http://localhost:1313/blogs/speeding-up-diffusion-models/">
+<link crossorigin="anonymous" href="/assets/css/stylesheet.075385d89635cc7e6dd6f677f471d775387e33236e0740ff6d4862c6fda603bc.css" integrity="sha256-B1OF2JY1zH5t1vZ39HHXdTh&#43;MyNuB0D/bUhixv2mA7w=" rel="preload stylesheet" as="style">
+<link rel="icon" href="http://localhost:1313/favicon.ico">
+<link rel="icon" type="image/png" sizes="16x16" href="http://localhost:1313/favicon-16x16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="http://localhost:1313/favicon-32x32.png">
+<link rel="apple-touch-icon" href="http://localhost:1313/apple-touch-icon.png">
+<link rel="mask-icon" href="http://localhost:1313/safari-pinned-tab.svg">
+<meta name="theme-color" content="#2e2e33">
+<meta name="msapplication-TileColor" content="#2e2e33">
+<link rel="alternate" hreflang="en" href="http://localhost:1313/blogs/speeding-up-diffusion-models/">
+<noscript>
+    <style>
+        #theme-toggle,
+        .top-link {
+            display: none;
+        }
+
+    </style>
+    <style>
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --theme: rgb(29, 30, 32);
+                --entry: rgb(46, 46, 51);
+                --primary: rgb(218, 218, 219);
+                --secondary: rgb(155, 156, 157);
+                --tertiary: rgb(65, 66, 68);
+                --content: rgb(196, 196, 197);
+                --code-block-bg: rgb(46, 46, 51);
+                --code-bg: rgb(55, 56, 62);
+                --border: rgb(51, 51, 51);
+            }
+
+            .list {
+                background: var(--theme);
+            }
+
+            .list:not(.dark)::-webkit-scrollbar-track {
+                background: 0 0;
+            }
+
+            .list:not(.dark)::-webkit-scrollbar-thumb {
+                border-color: var(--theme);
+            }
+        }
+
+    </style>
+</noscript>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.15.2/dist/katex.min.css" integrity="sha384-MlJdn/WNKDGXveldHDdyRP1R4CTHr3FeuDNfhsLPYrq2t0UBkUdK2jyTnXPEK1NQ" crossorigin="anonymous">
+
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.15.2/dist/katex.min.js" integrity="sha384-VQ8d8WVFw0yHhCk5E8I86oOhv48xLpnDZx5T9GogA/Y84DcCKWXDmSDfn13bzFZY" crossorigin="anonymous"></script>
+
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.15.2/dist/contrib/auto-render.min.js" integrity="sha384-+XBljXPPiv+OzfbB3cVmLHf4hdUFHlWNZN5spNQ7rmHTXpd7WvJum6fIACpNNfIR" crossorigin="anonymous" onload="renderMathInElement(document.body);"></script>
+
+
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    renderMathInElement(document.body, {
+        delimiters: [
+            {left: "$$", right: "$$", display: true},
+            {left: "$", right: "$", display: false}
+        ]
+    });
+});
+</script>
+
+
+</head>
+
+<body class="" id="top">
+<script>
+    if (localStorage.getItem("pref-theme") === "dark") {
+        document.body.classList.add('dark');
+    } else if (localStorage.getItem("pref-theme") === "light") {
+        document.body.classList.remove('dark')
+    } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        document.body.classList.add('dark');
+    }
+
+</script>
+
+<header class="header">
+    <nav class="nav">
+        <div class="logo">
+            <a href="http://localhost:1313/" accesskey="h" title="Parth&#39;s Blog (Alt + H)">Parth&#39;s Blog</a>
+            <div class="logo-switches">
+                <button id="theme-toggle" accesskey="t" title="(Alt + T)" aria-label="Toggle theme">
+                    <svg id="moon" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24"
+                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                    </svg>
+                    <svg id="sun" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24"
+                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="5"></circle>
+                        <line x1="12" y1="1" x2="12" y2="3"></line>
+                        <line x1="12" y1="21" x2="12" y2="23"></line>
+                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                        <line x1="1" y1="12" x2="3" y2="12"></line>
+                        <line x1="21" y1="12" x2="23" y2="12"></line>
+                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                    </svg>
+                </button>
+            </div>
+        </div>
+        <ul id="menu">
+            <li>
+                <a href="http://localhost:1313/about/" title="About">
+                    <span>About</span>
+                </a>
+            </li>
+            <li>
+                <a href="http://localhost:1313/search/" title="Search">
+                    <span>Search</span>
+                </a>
+            </li>
+        </ul>
+    </nav>
+</header>
+<main class="main">
+
+<article class="post-single">
+  <header class="post-header">
+    
+    <h1 class="post-title entry-hint-parent">
+      Speeding Up Diffusion Models
+    </h1>
+    <div class="post-meta"><span title='2025-04-14 20:13:59 -0400 -0400'>April 14, 2025</span>&nbsp;·&nbsp;9 min
+
+</div>
+  </header> 
+  <div class="post-content"><p>The diffusion process is currently the state-of-the-art method for generating any kind of data, be it images, videos, audio, discrete structures, text, etc. The process works by adding a calculated <code>noise</code> step by step to clean data then using a model to predict the denoised data. So next time we can just sample a random noise then use the same model to denoising and generate the datapoint iteratively.
+This was first introduced in [Non Equilibrium thermodynamics paper] and by now it has evolved quite a lot. Some of the evolutions are :</p>
+<ol>
+<li>Classifier Guidance and Classifier Free Guidance</li>
+<li>Different types of noise schedulers</li>
+<li>Faster and efficient ODE solvers</li>
+<li>Different types of flow patterns</li>
+<li>Different type of model architectures (like UNet, UViT, DiT)</li>
+<li>Multi Modal diffusion models (MM-DiT)</li>
+</ol>
+<p>Since the rise of transformers, we have been seeing a shift in all domains of machine learning where the state of the art algorithms have started using transformers. A similar kind of shift was seen in diffusion models where initially all of them were based on the UNet architecture but now shifted towards transformers as both of them are <code>isomorphic</code> (having same input and output shape) architectures.</p>
+<p>Now lets look are some training-free methods to make these models even faster while preserving the output quality.</p>
+<h3 id="caching-in-diffusion-models">Caching in Diffusion Models<a hidden class="anchor" aria-hidden="true" href="#caching-in-diffusion-models">#</a></h3>
+<p>To understand these methods we’ll revisit the architecture of Diffusion Transformers. Vanilla DiTs use a similar transformer encoder block as in vision transformer with full <code>bi-directional attention</code>. As compared to UNet based models where the input is first downsampled to lower dimentions then upsampled back to image space, here the input image is converted into patches and sent as input to transformer block (similar to tokens in language models). Transformers being a isomorphic architecture results in the output being the same shape as input. Multiple blocks of transformer are stacked on top of each other to form a deeper network. We can mathematically write the DiT as :</p>
+
+$$
+F_N(x_t; c) = f_N(f_{N-1}(\dotsm(f_1(x_t; c)))
+$$
+
+<p>Where $f_k(x; c)$ is $k^{th}$ DiT Block and $F_N(x_t; c)$ is the complete DiT unit. Now for generating an image first sample a random latent noise:</p>
+
+$$
+x_t \sim \mathcal{N}(0, 1) 
+$$
+
+<p>The after each iteration:
+
+$$
+x_{t-1} = solver(F_N(x_t; c), x_t, t)
+$$
+
+Where $c$ is time step conditioning or any other type of conditioning like text or image embeddings for conditional generation and $t$ is the timestep. As you can see there are many iterative computations performed from the same parameters which hints at finding such steps where the overall change in information of the image is negligible or the computation is redundant. Most of these methods exploit such computations performed in the denoising and intermediate steps.</p>
+
+<style>
+  .image-right {
+    float: center;
+    margin-left: 50px;
+    margin-bottom: 50px;
+    max-width: 250px;
+    height: auto;
+  }
+</style>
+<img src="/dit.png" alt="Description of image" class="image-right" id = "ditimg">
+
+<h3 id="delta-dit">$\Delta$-DiT<a hidden class="anchor" aria-hidden="true" href="#delta-dit">#</a></h3>
+<p>A transformer consists of multiple blocks, so [2] proposed a method called $\Delta$-Cache where at a certain timestep, the difference between the input image and output feature map after $k$ transformer blocks is cached and added to the image in the next iteration instead of sending it again from those $k$ blocks. The point behind caching the <code>difference</code> is that, caching the feature map directly results in loss of information in the image.</p>
+<p>Say there are $N$ blocks of transformer so each DiT unit can be represented as $F_N(x_t)$. At timestep $t$ we can send the input through blocks $F_K$ and cache the difference $\Delta = F_K - x_t$  before sending the feature maps to next blocks, in the next iteration at timestep $t-1$  we can directly add $\Delta$ instead of passing the image through those $k$ blocks.</p>
+<p>We can cache any set of transformer blocks across timesteps in this manner. They furthur studied the effects of caching the front, middle and the back blocks of DiT. In the below image the respective blocks are cached every two timesteps.</p>
+
+<img src="/speeding_up/different_block_effects.png" alt="Example Image"  style="width:300px; height:auto; display:block; margin:auto;">
+
+<p>As you can see, caching the front blocks result in poor outline generation but preservers finer details, conversly caching the back blocks preservers the outline but lead to distorted effects, thus we can conclude that the front blocks are reponsible for preserving the outline and structure of the image and back blocks are responsible for preserving the finer details.</p>
+<p>Based on the above analysis they proposed a dynamic caching technique called $\Delta$-DiT where $\Delta$-Cache is applied to different set of blocks across different timesteps of the reverse denoising process.</p>
+<p>To understand $\Delta$-DiT we will have to go throught the reverse denoising process. During the initial timesteps (when the SNR is very low), the model starts generating the overall structure of the iamge, like the boundaries, outlines, the basic color, or in general the <code>low frequency</code> information is added into the image. And during the final timesteps where the SNR has significantly improved it works on adding and refining the finer details or the <code>high frequency</code> information in the image.</p>
+<p>Now from the above analysis of caching different parts and denoising process, the authors proposed the following strategy :</p>
+<ul>
+<li>For timesteps $t \lt b$, $\Delta$-Cache is applied to the front blocks</li>
+<li>For timesteps $t \geq b$; $\Delta$-Cache is applied to the back blocks</li>
+</ul>
+<p>Where $b$ is a hyper parameter.</p>
+<h3 id="fora--fast-forward-caching">FORA : Fast-Forward Caching<a hidden class="anchor" aria-hidden="true" href="#fora--fast-forward-caching">#</a></h3>
+<p>Looking at a single transformer block it consists of a self-attention block, a cross attention block (might or might not be used) and a feedforward block [4], instead of caching the block outputs [5] proposed a static caching mechanism where the output activations of feedforward and self-attention blocks are resued in the subsequent timesteps.</p>
+
+<img src="/speeding_up/fora.png" alt="Example Image"  style="width:600px; height:auto; display:block; margin:auto;">
+
+<p>Their caching strategy is simple, for every N timesteps reuse the same cached activations and every Nth step trigger the recomputation.</p>
+<h3 id="teacache">TeaCache<a hidden class="anchor" aria-hidden="true" href="#teacache">#</a></h3>
+<p>TeaCache is a caching technique which caches <code>model outputs</code> across diffusion timesteps. Previous techniques cached intermediate activations at uniform timesteps thereby not considering the effects of irregular differences between model outputs across timesteps which reduces the output quality. Say for example the difference between outputs across three consicutive timesteps is very minimal where the computation actually is redundant, in those cases uniform caching might not maximize full utility.</p>
+
+<img src="/speeding_up/tcache_non_uniform.png" alt="Example Image"  style="width:700px; height:auto; display:block; margin:auto;">
+
+<p>To solve this problem [6] proposed an input aware caching mechanism, based on the principle that <code>inputs and outputs of diffusion model at a particular timesteps are highly corellated.</code> Let $O_t$ be defined as the output at timestep $t$, then our goal is to cache based on the following $L1_{rel}$ distance :</p>
+ 
+$$
+L1_{rel}(O, t) = \frac{||O_t - O_{t+1}||_1}{||O_{t+1}||_1}
+$$
+
+<p>to make this work we will have to know the output $O_{t+1}$ beforehand, so using the above principle [6] tried to estimate the above relative output difference based on the relative input distance. They established a relation between them by fitting a polynomial :</p>
+ 
+$$
+y = f(x) = a_0 + a_1x + a_2x ^2 + \dotsm+a_nx^n
+$$
+
+<p>where $y$ is estimated output difference and $x$ is input difference between consecutive timesteps.</p>
+<p>Now make note that input is not the vanilla noisy image which is given to the model at each timestep. It is a <code>timestep modulated image</code> which is done before sending the input to the attention block. They mention that directly using noisy image to estimate the output differenece leads to <code>scaling bias</code>. Thus we use the modulated images along with a polynomial fitting algorithm which reduces the scaling bias.</p>
+<h4 id="caching-algorithm">Caching Algorithm<a hidden class="anchor" aria-hidden="true" href="#caching-algorithm">#</a></h4>
+<p>Keep accumulating <code>estimated relative output difference</code> using relative input difference $\sum^{t_b-1}_{t=t_a}f(L1_{rel}(F, t) )$  , where $F$ is the timestep modulated input, and keep caching the output. At any timestep $t_b$, if the accumulated distance exceeds threshold $\delta$, set the accumulated L1 distance to zero and refresh the cache by calculating new output.</p>
+ 
+$$
+\sum^{t_b-1}_{t=t_a}f(L1_{rel}(F, t) )  \le \delta \lt \sum^{t_b}_{t=t_a}f(L1_{rel}(F, t) )
+$$
+
+<h3 id="t-gate">T-Gate<a hidden class="anchor" aria-hidden="true" href="#t-gate">#</a></h3>
+<p>{cite} proposed a training-free attention map caching mechanism across timesteps based on their analysis of the effects of caching self and cross attention maps.
+Self attention in language models help in creating a representation of a token which has the <code>relevant context</code> of all other tokens present in the sentence making it the key feature in large language models. Similarly in the case of diffusion models it helps in improving the consistancy and capturing the <code>global strucutre</code> of the image. Each CNN layer captures the local information, so to create a global context we have to stack multiple of them, which self-attention captures in single shot.</p>
+<p>Similarly cross attention where the keys and values are from the conditioned embeddings and the query is from the image patches, captures the relevant information for each image patch from the conditioned embedding to create a <code>context-aware</code> representation.</p>
+<p>{cite} analysed the role of self and cross attention across the diffusion timesteps and partitioned them into two parts :</p>
+<ol>
+<li>Semantic-Planning Stage (the initial denoising steps)</li>
+<li>Fidelity-Improving Stage (final denoising steps)</li>
+</ol>
+<p>This is similar to $\Delta$-Cache applying different strategies for initial and final deonising timesteps. They observed that :</p>
+<ul>
+<li>Self attention is important in the Fidelity Improving Stage (ie the final denoising steps) where the finer details of the image are being generated. So it cannot be cached or removed from those steps.</li>
+<li>Cross attention maps converge with timesteps, which means it contributes a lot in the semantic-planning stage but lesser in fidelity improcing stage as most of the image structure is being built in the semantic planning stage.</li>
+</ul>
+<p>Algorithm :</p>
+<p>Based on the above observations they proposed a caching strategy where during the Semantic-Planning stage the cross attention will be fully active and self attention will be partially active performing the cache and resuse starategy after $k$ steps. And during the Fidelity-Improving stage the self attention will be fully active where as cross attention will be halted and a single cross attention maps which is the avarage of embeddings of condition + NULL text will be used for all subsequent timesteps.</p>
+<h3 id="adacache">AdaCache<a hidden class="anchor" aria-hidden="true" href="#adacache">#</a></h3>
+<hr>
+<h3 id="references">References<a hidden class="anchor" aria-hidden="true" href="#references">#</a></h3>
+<p>[1] William Peebles and Saining Xie. <a href="https://arxiv.org/abs/2212.09748">&ldquo;Scalable Diffusion Models with Transformers&rdquo;</a>. arXiv preprint arXiv:2212.09748 (2023).</p>
+<p>[2] Chen, et. al. <a href="https://arxiv.org/pdf/2406.01125">&quot;∆-DiT: A Training-Free Acceleration Method Tailored for Diffusion Transformers&quot;</a> arXiv preprint arXiv:2406.  01125 (2024)</p>
+<p>[3] Dosovitskiy, et. al. <a href="https://arxiv.org/abs/2010.11929">&ldquo;An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale&rdquo;</a> arXiv preprint arXiv:2010.11929</p>
+<p>[4] Vaswani, et. al. <a href="https://arxiv.org/abs/1706.03762">&ldquo;Attention Is All You Need&rdquo;</a> arXiv preprint arXiv:1706.03762</p>
+<p>[5] Selvaraju, et. al. <a href="https://arxiv.org/abs/2407.01425">&ldquo;FORA: Fast-Forward Caching in Diffusion Transformer Acceleration&rdquo;</a> arXiv preprint arXiv:2407.01425</p>
+<p>[6] Liu, et. al. <a href="https://arxiv.org/abs/2411.19108">&ldquo;Timestep Embedding Tells: It&rsquo;s Time to Cache for Video Diffusion Mode&rdquo;</a> arXiv preprint arXiv:2411.19108</p>
+
+
+  </div>
+
+  <footer class="post-footer">
+    <ul class="post-tags">
+      <li><a href="http://localhost:1313/tags/diffusion/">Diffusion</a></li>
+      <li><a href="http://localhost:1313/tags/computer-vision/">Computer Vision</a></li>
+      <li><a href="http://localhost:1313/tags/generative-ai/">Generative Ai</a></li>
+    </ul>
+  </footer>
+</article>
+    </main>
+    
+<footer class="footer">
+    <div style="display: flex; justify-content: center; align-items: center; gap: 30px; padding-bottom: 10px;"> 
+        <div style="width: 25px; height: 25px; display: inline-block;">
+            <a href="https://github.com/parth-badgujar" target="_blank" rel="noopener noreferrer me" title="Github">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22">
+            </path>
+                </svg>
+            </a>
+        </div>
+        <div style="width: 25px; height: 25px; display: inline-block;">
+            <a href="https://x.com/SimplyRockets" target="_blank"> 
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1300 1300" fill="none" stroke="currentColor" stroke-width="60" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M714.163 519.284L1160.89 0H1055.03L667.137 450.887L357.328 0H0L468.492 681.821L0 1226.37H105.866L515.491 750.218L842.672 1226.37H1200L714.137 519.284H714.163ZM569.165 687.828L521.697 619.934L144.011 79.6944H306.615L611.412 515.685L658.88 583.579L1055.08 1150.3H892.476L569.165 687.854V687.828Z" fill="white"/>
+                    </svg>
+            </a> 
+        </div>
+        <a href="https://www.linkedin.com/in/parth-badgujar" target="_blank"> 
+            <img src="/linkedin.svg" width="25px" height="25px" alt="LinkedIn"/> 
+        </a> 
+        <a href="mailto:parthbadgujar57@gmail.com"> 
+            <img src="/gmail.svg" width="30px" height="30px" alt="Email"/> 
+        </a> 
+    </div>
+        <span>&copy; 2025 <a href="http://localhost:1313/">Parth&#39;s Blog</a></span> · 
+    
+    <span>
+        Powered by
+        <a href="https://gohugo.io/" rel="noopener noreferrer" target="_blank">Hugo</a> &
+        <a href="https://github.com/adityatelange/hugo-PaperMod/" rel="noopener" target="_blank">PaperMod</a>
+    </span>
+</footer>
+<a href="#top" aria-label="go to top" title="Go to Top (Alt + G)" class="top-link" id="top-link" accesskey="g">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 6" fill="currentColor">
+        <path d="M12 6H0l6-6z" />
+    </svg>
+</a>
+
+<script>
+    let menu = document.getElementById('menu')
+    if (menu) {
+        menu.scrollLeft = localStorage.getItem("menu-scroll-position");
+        menu.onscroll = function () {
+            localStorage.setItem("menu-scroll-position", menu.scrollLeft);
+        }
+    }
+
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+        anchor.addEventListener("click", function (e) {
+            e.preventDefault();
+            var id = this.getAttribute("href").substr(1);
+            if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                document.querySelector(`[id='${decodeURIComponent(id)}']`).scrollIntoView({
+                    behavior: "smooth"
+                });
+            } else {
+                document.querySelector(`[id='${decodeURIComponent(id)}']`).scrollIntoView();
+            }
+            if (id === "top") {
+                history.replaceState(null, null, " ");
+            } else {
+                history.pushState(null, null, `#${id}`);
+            }
+        });
+    });
+
+</script>
+<script>
+    var mybutton = document.getElementById("top-link");
+    window.onscroll = function () {
+        if (document.body.scrollTop > 800 || document.documentElement.scrollTop > 800) {
+            mybutton.style.visibility = "visible";
+            mybutton.style.opacity = "1";
+        } else {
+            mybutton.style.visibility = "hidden";
+            mybutton.style.opacity = "0";
+        }
+    };
+
+</script>
+<script>
+    document.getElementById("theme-toggle").addEventListener("click", () => {
+        if (document.body.className.includes("dark")) {
+            document.body.classList.remove('dark');
+            localStorage.setItem("pref-theme", 'light');
+        } else {
+            document.body.classList.add('dark');
+            localStorage.setItem("pref-theme", 'dark');
+        }
+    })
+
+</script>
+</body>
+
+</html>

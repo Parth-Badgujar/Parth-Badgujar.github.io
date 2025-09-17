@@ -1,0 +1,20 @@
+body:not(.list) {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    margin: 0;
+}
+
+body:not(.list) .main {
+    flex: 1;
+    min-height: auto;
+}
+
+.post-single .main {
+    flex: 1;
+}
+
+body:not(.list) .container {
+    height: auto;
+    min-height: calc(100vh - 120px);
+}

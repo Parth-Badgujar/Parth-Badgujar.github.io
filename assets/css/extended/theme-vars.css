@@ -1,0 +1,30 @@
+:root {
+    --main-width: 900px;
+    --line-width: 0.5em;
+}
+
+/* Reduce post/page title size */
+.post-title,
+.entry-title {
+    font-size: 2rem !important;  /* Default is usually 2rem+ */
+}
+
+/* Reduce h1 headings in content */
+.post-content h1 {
+    font-size: 1.5rem !important;
+}
+
+.post-content h3 {
+    font-size: 1.4rem !important;
+}
+
+/* Reduce archive/list page titles */
+.archive-title {
+    font-size: 1.2rem !important;
+}
+
+
+.post-content {
+    font-size: 1rem; /* Default is usually 1rem */
+    line-height: 1.6;
+}

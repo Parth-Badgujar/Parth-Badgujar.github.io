@@ -69,18 +69,9 @@
     font-size: 12px;
 }
 
-/*
-    Separated this off from .toc a:hover
-    .post-content a gets underline
-*/
-.post-content a {
-    box-shadow: 0 1px 0;
-    box-decoration-break: clone;
-    -webkit-box-decoration-break: clone;
-}
-
-/* No underline on ToC hover */
+.post-content a,
 .toc a:hover {
+    box-shadow: 0 1px 0;
     box-decoration-break: clone;
     -webkit-box-decoration-break: clone;
 }
@@ -139,19 +130,18 @@
 }
 
 .post-content table {
-    margin-bottom: 32px;
+    margin-bottom: var(--content-gap);
 }
 
 .post-content table th,
 .post-content table:not(.highlighttable, .highlight table, .gist .highlight) td {
     min-width: 80px;
-    padding: 12px 8px;
+    padding: 8px 5px;
     line-height: 1.5;
     border-bottom: 1px solid var(--border);
 }
 
 .post-content table th {
-    font-size: 14px;
     text-align: start;
 }
 
@@ -165,7 +155,7 @@
 
 .post-content .highlight:not(table) {
     margin: 10px auto;
-    /* Deleted this, fixes https://github.com/jesse-wei/jessewei.dev-PaperMod/issues/18#issuecomment-1558471532 */
+    background: var(--code-block-bg) !important;
     border-radius: var(--radius);
     direction: ltr;
 }
@@ -209,10 +199,11 @@
 }
 
 .post-content pre code {
-    display: block;
+    display: grid;
     margin: auto 0;
     padding: 10px;
-    /* Removed this */
+    color: rgb(213, 213, 214);
+    background: var(--code-block-bg) !important;
     border-radius: var(--radius);
     overflow-x: auto;
     word-break: break-all;
@@ -275,7 +266,8 @@
 
 .toc details summary {
     cursor: zoom-in;
-    margin-inline-start: 20px;
+    margin-inline-start: 10px;
+    user-select: none;
 }
 
 .toc details[open] summary {
@@ -285,6 +277,12 @@
 .toc .details {
     display: inline;
     font-weight: 500;
+}
+
+.toc .inner {
+    margin: 5px 20px 0;
+    padding: 0 10px;
+    opacity: 0.9;
 }
 
 .toc li ul {
@@ -299,10 +297,18 @@
     margin-top: 56px;
 }
 
+.post-footer>* {
+    margin-bottom: 10px;
+}
+
+.post-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
 .post-tags li {
     display: inline-block;
-    margin-inline-end: 3px;
-    margin-bottom: 5px;
 }
 
 .post-tags a,
@@ -315,35 +321,29 @@
 
 .post-tags a {
     display: block;
-    padding-inline-start: 14px;
-    padding-inline-end: 14px;
+    padding: 0 14px;
     color: var(--secondary);
     font-size: 14px;
     line-height: 34px;
     background: var(--code-bg);
 }
 
-/* Separated .post-tags a:hover and .paginav a:hover */
-
-.post-tags a:hover {
-    background: var(--border);
-    color: var(--carolina_blue);
-}
-
+.post-tags a:hover,
 .paginav a:hover {
     background: var(--border);
 }
 
 .share-buttons {
-    margin: 14px 0;
-    padding-inline-start: var(--radius);
+    padding: 10px;
     display: flex;
     justify-content: center;
     overflow-x: auto;
+    gap: 10px;
 }
 
+.share-buttons li,
 .share-buttons a {
-    margin-top: 10px;
+    display: inline-flex;
 }
 
 .share-buttons a:not(:last-of-type) {
@@ -364,10 +364,8 @@ h6:hover .anchor {
 }
 
 .paginav {
-    margin: 10px 0;
     display: flex;
     line-height: 30px;
-    border-radius: var(--radius);
 }
 
 .paginav a {
@@ -388,10 +386,9 @@ h6:hover .anchor {
     width: 50%;
 }
 
-/*
-Don't underline .paginav .next:hover and .paginav .prev:hover
-Since the text already changes color
-*/
+.paginav span:hover:not(.title) {
+    box-shadow: 0 1px 0;
+}
 
 .paginav .next {
     margin-inline-start: auto;
@@ -409,79 +406,4 @@ h1>a>svg {
 img.in-text {
     display: inline;
     margin: auto;
-}
-
-/*
-Begin side/hover ToC
-https://github.com/reorx/hugo-PaperModX/blob/master/assets/css/common/post-single.css
-*/
-
-.toc {
-    margin: 0 2px 40px 2px;
-    border: 1px solid var(--border);
-    background: var(--code-bg);
-    border-radius: var(--radius);
-    padding: 0.4em 0;
-}
-
-@media screen and (min-width: 1350px) {
-    .toc.side {
-        position: fixed;
-        top: 118px;
-        z-index: 1;
-        max-height: calc(100% - 150px);
-        overflow: auto;
-        /* Note: Moved this inside the side ToC so the fixed ToC has normal font size */
-        font-size: .8em;
-    }
-    .toc.side::-webkit-scrollbar-thumb {
-        border: 5px solid var(--code-bg);
-    }
-    .toc.side.left {
-        left: 15px;
-        width: 250px;
-    }
-    .toc.side.right {
-        right: 15px;
-        width: 265px;
-    }
-    /* Don't color the active link if ToC isn't on the side */
-    .toc li a.active {
-        /* Modification, color link instead of changing background color, less distracting */
-        color: var(--carolina_blue);
-    }
-}
-
-.toc details summary {
-    cursor: pointer;
-    margin-inline-start: 15px;
-}
-
-.toc .details {
-    display: inline;
-    font-weight: 500;
-}
-
-.toc .inner {
-    padding: 10px 15px 5px 35px;
-}
-
-.toc ul {
-    margin: 0;
-    padding: 0;
-}
-.toc li ul {
-    margin-inline-start: 20px;
-}
-.toc li a {
-    line-height: 1.5em;
-    padding: 3px 5px;
-    border-radius: 5px;
-    display: block;
-}
-
-/* Removed .toc li a:hover because my a:hover already makes the link blue */
-
-.toc summary:focus {
-    outline: 0;
 }

@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en" dir="auto">
+
+<head><script src="/livereload.js?mindelay=10&amp;v=2&amp;port=1313&amp;path=livereload" data-no-instant defer></script><meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+<meta name="robots" content="noindex, nofollow">
+<title>Speeding Up Diffusion Models | P3g4su5</title>
+<meta name="keywords" content="diffusion, computer vision, generative ai">
+<meta name="description" content="describing and implementing caching mechanism for diffusion models">
+<meta name="author" content="">
+<link rel="canonical" href="http://localhost:1313/blogs/speeding-up-diffusion-mo/">
+<link crossorigin="anonymous" href="/assets/css/stylesheet.b581f084d071d21e61a3e41e17c8c6c71f471a1115ccbe6b2006283b0ee2cb62.css" integrity="sha256-tYHwhNBx0h5ho&#43;QeF8jGxx9HGhEVzL5rIAYoOw7iy2I=" rel="preload stylesheet" as="style">
+<link rel="icon" href="http://localhost:1313/favicon.ico">
+<link rel="icon" type="image/png" sizes="16x16" href="http://localhost:1313/favicon-16x16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="http://localhost:1313/favicon-32x32.png">
+<link rel="apple-touch-icon" href="http://localhost:1313/apple-touch-icon.png">
+<link rel="mask-icon" href="http://localhost:1313/safari-pinned-tab.svg">
+<meta name="theme-color" content="#2e2e33">
+<meta name="msapplication-TileColor" content="#2e2e33">
+<link rel="alternate" hreflang="en" href="http://localhost:1313/blogs/speeding-up-diffusion-mo/">
+<noscript>
+    <style>
+        #theme-toggle,
+        .top-link {
+            display: none;
+        }
+
+    </style>
+    <style>
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --theme: rgb(29, 30, 32);
+                --entry: rgb(46, 46, 51);
+                --primary: rgb(218, 218, 219);
+                --secondary: rgb(155, 156, 157);
+                --tertiary: rgb(65, 66, 68);
+                --content: rgb(196, 196, 197);
+                --code-block-bg: rgb(46, 46, 51);
+                --code-bg: rgb(55, 56, 62);
+                --border: rgb(51, 51, 51);
+            }
+
+            .list {
+                background: var(--theme);
+            }
+
+            .list:not(.dark)::-webkit-scrollbar-track {
+                background: 0 0;
+            }
+
+            .list:not(.dark)::-webkit-scrollbar-thumb {
+                border-color: var(--theme);
+            }
+        }
+
+    </style>
+</noscript>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.15.2/dist/katex.min.css" integrity="sha384-MlJdn/WNKDGXveldHDdyRP1R4CTHr3FeuDNfhsLPYrq2t0UBkUdK2jyTnXPEK1NQ" crossorigin="anonymous">
+
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.15.2/dist/katex.min.js" integrity="sha384-VQ8d8WVFw0yHhCk5E8I86oOhv48xLpnDZx5T9GogA/Y84DcCKWXDmSDfn13bzFZY" crossorigin="anonymous"></script>
+
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.15.2/dist/contrib/auto-render.min.js" integrity="sha384-+XBljXPPiv+OzfbB3cVmLHf4hdUFHlWNZN5spNQ7rmHTXpd7WvJum6fIACpNNfIR" crossorigin="anonymous" onload="renderMathInElement(document.body);"></script>
+
+>
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    renderMathInElement(document.body, {
+        delimiters: [
+            {left: "$$", right: "$$", display: true},
+            {left: "$", right: "$", display: false}
+        ]
+    });
+});
+</script>
+
+
+</head>
+
+<body class="" id="top">
+<script>
+    if (localStorage.getItem("pref-theme") === "dark") {
+        document.body.classList.add('dark');
+    } else if (localStorage.getItem("pref-theme") === "light") {
+        document.body.classList.remove('dark')
+    } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        document.body.classList.add('dark');
+    }
+
+</script>
+
+<header class="header">
+    <nav class="nav">
+        <div class="logo">
+            <a href="http://localhost:1313//about" accesskey="h" title="P3g4su5 (Alt + H)">
+                <img src="http://localhost:1313/dp-mask.png" alt="" aria-label="logo"
+                    height="35">P3g4su5</a>
+            <div class="logo-switches">
+                <button id="theme-toggle" accesskey="t" title="(Alt + T)" aria-label="Toggle theme">
+                    <svg id="moon" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24"
+                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                    </svg>
+                    <svg id="sun" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24"
+                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="5"></circle>
+                        <line x1="12" y1="1" x2="12" y2="3"></line>
+                        <line x1="12" y1="21" x2="12" y2="23"></line>
+                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                        <line x1="1" y1="12" x2="3" y2="12"></line>
+                        <line x1="21" y1="12" x2="23" y2="12"></line>
+                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                    </svg>
+                </button>
+            </div>
+        </div>
+        <ul id="menu">
+            <li>
+                <a href="http://localhost:1313/about/" title="About">
+                    <span>About</span>
+                </a>
+            </li>
+            <li>
+                <a href="http://localhost:1313/projects/" title="Projects">
+                    <span>Projects</span>
+                </a>
+            </li>
+            <li>
+                <a href="http://localhost:1313/publications/" title="Publications">
+                    <span>Publications</span>
+                </a>
+            </li>
+            <li>
+                <a href="http://localhost:1313/blogs/" title="Blogs">
+                    <span>Blogs</span>
+                </a>
+            </li>
+            <li>
+                <a href="http://localhost:1313/writeups/" title="CTF Writeups">
+                    <span>CTF Writeups</span>
+                </a>
+            </li>
+            <li>
+                <a href="http://localhost:1313/search/" title="Search">
+                    <span>Search</span>
+                </a>
+            </li>
+        </ul>
+    </nav>
+</header>
+<main class="main">
+
+<article class="post-single">
+  <header class="post-header">
+    
+    <h1 class="post-title entry-hint-parent">
+      Speeding Up Diffusion Models
+    </h1>
+    <div class="post-meta"><span title='2025-04-14 20:13:59 -0400 -0400'>April 14, 2025</span>
+
+</div>
+  </header> 
+  <div class="post-content"><p>DiT (Diffusion Transformer) based models are currently state-of-the-art for generating images and videos. They work by sampling random noise and then progressively denoising it with conditioning to generate the final image. However, this sequential denoising process makes generation much slower. We will look at various training free methods to improve the quality and efficiency of DiT based models.</p>
+<h3 id="caching-in-diffusion-models">Caching in Diffusion Models<a hidden class="anchor" aria-hidden="true" href="#caching-in-diffusion-models">#</a></h3>
+
+<style>
+  .image-right {
+    float: right;
+    margin-left: 50px;
+    margin-bottom: 50px;
+    max-width: 300px;
+    height: auto;
+  }
+</style>
+<img src="/dit.png" alt="Description of image" class="image-right" id = "ditimg">
+<script>
+if (document.body.className.includes("dark")) {
+      document.getElementById("ditimg").src = "/dit-dark.png";
+      console.log("dark");
+  } 
+  else {
+    document.getElementById("ditimg").src = "/dit.png";
+    console.log("light"); 
+}
+document.getElementById('theme-toggle').addEventListener('click', function() {
+  if (document.body.className.includes("dark")) {
+      document.getElementById("ditimg").src = "/dit.png";
+      console.log("dark");
+  } 
+  else {
+    document.getElementById("ditimg").src = "/dit-dark.png";
+    console.log("light"); 
+  }
+});
+</script>
+
+<p>To understand these methods first we’ll revisit the architecture of Diffusion Transformers. DiTs are based on the principle of Vision Transformers and Latent Diffusion Models. First the input noise is encoded into latent space using a VAE, then this latent is converted into patches and sent as input to transformer block. We can mathematically write a DiT with $N$ blocks as :</p>
+
+$$
+F^{N}_1(x_t) = f_N(f_{N-1}(\dotsm(f_1(x_t)))
+$$
+
+<p>Where $f_k(x)$ is $k^{th}$ DiT Block and $F^{N}_1(x_t)$ is the complete DiT unit, now for generating an image first sample a random latent noise:</p>
+
+$$
+x_t \sim \mathcal{N}(0, 1) 
+$$
+
+<p>The after each iteration:
+
+$$
+x_{t-1} = solver(F^N_1(x_t; c), x_t, t)
+$$
+
+Where $c$ is the text conditioning and $t$ is the timestep. As you can see there are many iterative computations performed from the same parameters which hints at finding such steps where the overall change of information in the image is negligible and computation is redundant. Most of these methods try to find and simplify such computations performed in the denoising step and the intermediate steps involved.</p>
+<h3 id="delta-dit">$\Delta$-DiT<a hidden class="anchor" aria-hidden="true" href="#delta-dit">#</a></h3>
+<p>As seen above there are many blocks in a transformer module, so <!-- raw HTML omitted --> proposed a method called $\Delta$-Cache where at a single timestep, the difference between the input image and output feature map after $k$ blocks from previous timestep is used in the next iteration instead of sending the image from those $k$ blocks. They cache the difference instead of directly caching the feature map as it results in loss of information.</p>
+<p>Say there are $N$ blocks of transformer so each DiT unit can be represented as $F^N_1(x_t)$. At timestep $t$ we can send the input through blocks $F^k_1$ and cache the difference $\Delta = F^k_1 - x_t$  before sending the feature maps to next blocks , in the next iteration at timestep $t-1$  we can directly add $\Delta$ instead of passing the image through $k$ blocks. Then passing the resulting activation to next blocks. Similarly this can be used to cache either front, middle or back blocks of DiT.</p>
+<p>They furthur studied the effects of front, middle and back blocks on the final image and came to conclusion that front blocks are responsible for the overall struture of the image and back blocks are responsible for the fine details added in the image. Now if we look at the generations across timesteps it is clearly evident that the overall structure of the image is created at the initial timesteps and finer details are added near the end, so to effectively apply this strategy we can cache the back blocks at initial timesteps and front blocks close to $t = 0$.</p>
+<h3 id="fora--fast-forward-caching">FORA : Fast-Forward Caching<a hidden class="anchor" aria-hidden="true" href="#fora--fast-forward-caching">#</a></h3>
+<p>DiTs have the same isotropic architecture across timesteps. The main computation overhead are the Feedforward block and attention block. Based on these observations <!-- raw HTML omitted --> proposed a static caching mechanism where you choose a single hyperparameter $N$ and perform computation when timestep $t$ is divisible by $N$.</p>
+<h3 id="teacache">TeaCache<a hidden class="anchor" aria-hidden="true" href="#teacache">#</a></h3>
+<p>TeaCache is a caching technique which caches model outputs across diffusion timesteps. Previous techniques simply cached model outputs at uniform timesteps thereby not considering the effects of irregular differences between model outputs across timesteps which reduces the output quality. Now say the difference between outputs across three consicutive timesteps is very minimal where caching actually makes sense there uniform caching might not maximize full utility.</p>
+<p>The to solve the above problem we can cache based on the relative output difference. Let $O_t$ be defined as the output at timestep $t$.</p>
+ 
+$$
+L1_{rel}(O, t) = \frac{||O_t - O_{t+1}||_1}{||O_{t+1}||_1}
+$$
+
+<p>but for that we will have to perform addition computation to calculate $O_{t+1}$ which doesn’t make sense, so to solve this problem <!-- raw HTML omitted --> introduced a method to estimate the relative difference between the output. Across the time steps the model input is modulated using time step embedding so we will be taking the modulated input into consideration. Using the fact that the difference between output and difference between modulated input are highly correlated we can fit a simple polynomial for the same.</p>
+ 
+$$
+y = f(x) = a_0 + a_1x + a_2x ^2 + \dotsm+a_nx^n
+$$
+
+<p>where $y$ is estimated output difference and $x$ is input difference.</p>
+<p>Caching Algorithm</p>
+<p>Keep accumulating relative estimated output difference using relative input difference $\sum^{t_b-1}_{t=t_a}f(L1_{rel}(F, t) )$  , where $F$ is the timestep modulated input, and keep caching the output. At any timestep $t_b$, if the accumulated distance exceeds threshold $\delta$, set the accumulated L1 distance to zero and refresh the cache by calculating new output.</p>
+ 
+$$
+\sum^{t_b-1}_{t=t_a}f(L1_{rel}(F, t) )  \le \delta \lt \sum^{t_b}_{t=t_a}f(L1_{rel}(F, t) )
+$$
+
+
+
+  </div>
+
+  <footer class="post-footer">
+    <ul class="post-tags">
+      <li><a href="http://localhost:1313/tags/diffusion/">Diffusion</a></li>
+      <li><a href="http://localhost:1313/tags/computer-vision/">Computer Vision</a></li>
+      <li><a href="http://localhost:1313/tags/generative-ai/">Generative Ai</a></li>
+    </ul>
+  </footer>
+</article>
+    </main>
+    
+<footer class="footer">
+        <span>&copy; 2025 <a href="http://localhost:1313/">P3g4su5</a></span> · 
+
+    <span>
+        Powered by
+        <a href="https://gohugo.io/" rel="noopener noreferrer" target="_blank">Hugo</a> &
+        <a href="https://github.com/adityatelange/hugo-PaperMod/" rel="noopener" target="_blank">PaperMod</a>
+    </span>
+</footer>
+<a href="#top" aria-label="go to top" title="Go to Top (Alt + G)" class="top-link" id="top-link" accesskey="g">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 6" fill="currentColor">
+        <path d="M12 6H0l6-6z" />
+    </svg>
+</a>
+
+<script>
+    let menu = document.getElementById('menu')
+    if (menu) {
+        menu.scrollLeft = localStorage.getItem("menu-scroll-position");
+        menu.onscroll = function () {
+            localStorage.setItem("menu-scroll-position", menu.scrollLeft);
+        }
+    }
+
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+        anchor.addEventListener("click", function (e) {
+            e.preventDefault();
+            var id = this.getAttribute("href").substr(1);
+            if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                document.querySelector(`[id='${decodeURIComponent(id)}']`).scrollIntoView({
+                    behavior: "smooth"
+                });
+            } else {
+                document.querySelector(`[id='${decodeURIComponent(id)}']`).scrollIntoView();
+            }
+            if (id === "top") {
+                history.replaceState(null, null, " ");
+            } else {
+                history.pushState(null, null, `#${id}`);
+            }
+        });
+    });
+
+</script>
+<script>
+    var mybutton = document.getElementById("top-link");
+    window.onscroll = function () {
+        if (document.body.scrollTop > 800 || document.documentElement.scrollTop > 800) {
+            mybutton.style.visibility = "visible";
+            mybutton.style.opacity = "1";
+        } else {
+            mybutton.style.visibility = "hidden";
+            mybutton.style.opacity = "0";
+        }
+    };
+
+</script>
+<script>
+    document.getElementById("theme-toggle").addEventListener("click", () => {
+        if (document.body.className.includes("dark")) {
+            document.body.classList.remove('dark');
+            localStorage.setItem("pref-theme", 'light');
+        } else {
+            document.body.classList.add('dark');
+            localStorage.setItem("pref-theme", 'dark');
+        }
+    })
+
+</script>
+</body>
+
+</html>
