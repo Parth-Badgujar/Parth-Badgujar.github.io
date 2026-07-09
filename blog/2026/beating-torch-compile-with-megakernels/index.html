@@ -1,0 +1,218 @@
+<!DOCTYPE html> <html lang="en"> <head> <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"> <meta charset="utf-8"> <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no"> <meta http-equiv="X-UA-Compatible" content="IE=edge"> <title> Beating torch.compile with Megakernels in CuTe DSL [Part 1] | Parth Badgujar </title> <meta name="author" content="Parth Badgujar"> <meta name="description" content="A deep dive into custom GPU kernels and how they can outperform torch.compile."> <meta name="keywords" content="jekyll, jekyll-theme, academic-website, portfolio-website"> <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https:; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: https:; font-src 'self' data: https:; media-src 'self' https:; frame-src 'self' https:; connect-src 'self' https:;"> <style>
+  :root {
+    --max-content-width: 980px;
+  }
+</style> <link rel="stylesheet" href="/assets/css/tailwind.css?v=50c64c15cbb9fd1ce6056fdb8bcb4b62"> <link defer rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tocbot@4.36.4/dist/tocbot.css" integrity="sha256-zTN0r+0OKaIv2xqeNNIYxNk0pWJ6+IqPGc1iDgVzWF0=" crossorigin="anonymous"> <link defer rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@7.2.0/css/all.min.css" integrity="sha256-MVopmdyC2tYTiJ8wlktf0uh0v4NgT+vNdyVFepi7Q0c=" crossorigin="anonymous"> <link defer rel="stylesheet" href="https://cdn.jsdelivr.net/npm/academicons@1.9.5/css/academicons.min.css" integrity="sha256-SzrCOBJbGVFMahewkgjwnApaV2+av1DwMAA+/QGLyZw=" crossorigin="anonymous"> <link defer rel="stylesheet" href="https://cdn.jsdelivr.net/npm/scholar-icons@1.0.3/css/scholar-icons.css" integrity="sha256-VY3hHVj/hNX3fYG6wtbA6TcKJQl7+FthzGSyIB64klY=" crossorigin="anonymous"> <link defer rel="stylesheet" type="text/css" href="https://fonts.googleapis.com/css?family=Roboto:300,400,500,700|Roboto+Slab:100,300,400,500,700|Material+Icons&amp;display=swap"> <link defer rel="stylesheet" href="/assets/css/jekyll-pygments-themes-github.css?v=591dab5a4e56573bf4ef7fd332894c99" media="" id="highlight_theme_light"> <link rel="shortcut icon" href="/assets/img/logo.png?v=29104f2d35edc99944734905101b19dc"> <link rel="stylesheet" href="/assets/css/main.css?v=f0b101217084a90093badfe99ff9a7d1"> <link rel="canonical" href="https://parth-badgujar.github.io/blog/2026/beating-torch-compile-with-megakernels/"> <script src="/assets/js/theme.js?v=7af685e2ba20b37fef545c97b8064050"></script> <link defer rel="stylesheet" href="/assets/css/jekyll-pygments-themes-native.css?v=5847e5ed4a4568527aa6cfab446049ca" media="none" id="highlight_theme_dark"> <script>
+    initTheme();
+  </script> </head> <body class="fixed-top-nav "> <header> <nav id="navbar" class="navbar navbar-light navbar-expand-sm fixed-top" role="navigation"> <div class="container"> <a class="navbar-brand title font-weight-lighter" href="/"> <span class="font-weight-bold">Parth</span> Badgujar </a> <button class="navbar-toggler collapsed navbar-toggler-main" type="button" data-nav-toggle="navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation"> <span class="sr-only">Toggle navigation</span> <span class="icon-bar top-bar"></span> <span class="icon-bar middle-bar"></span> <span class="icon-bar bottom-bar"></span> </button> <div class="collapse navbar-collapse navbar-collapse-main" id="navbarNav"> <ul class="navbar-nav navbar-menu-list flex-nowrap"> <li class="nav-item "> <a class="nav-link" href="/">About </a> </li> <li class="nav-item active"> <a class="nav-link" href="/blog/">Blog </a> </li> <li class="nav-item "> <a class="nav-link" href="/publications/">Publications </a> </li> <li class="nav-item "> <a class="nav-link" href="/projects/">Projects </a> </li> <li class="nav-item"> <button id="search-toggle" type="button" title="Search" aria-label="Open search"> <span class="nav-link">ctrl k <i class="fa-solid fa-magnifying-glass"></i></span> </button> </li> <li class="toggle-container"> <button id="light-toggle" type="button" title="Change theme" aria-label="Change color theme"> <i class="fa-half-sun-moon" id="light-toggle-system"></i> <i class="fa-solid fa-moon" id="light-toggle-dark"></i> <i class="fa-solid fa-sun" id="light-toggle-light"></i> </button> </li> </ul> </div> </div> </nav> <progress id="progress" value="0"> <div class="progress-container"> <span class="progress-bar"></span> </div> </progress> </header> <div class="container mt-5" role="main"> <div class="row"> <div class="col-sm-3"> <nav id="toc-sidebar" class="sticky-top toc toc-sidebar" aria-label="Table of contents" data-toc-collapse="expanded" data-toc-collapse-depth=""></nav> </div> <div class="col-sm-9"> <div class="post"> <header class="post-header"> <h1 class="post-title">Beating torch.compile with Megakernels in CuTe DSL [Part 1]</h1> <p class="post-meta"> Created on July 05, 2026 </p> <p class="post-tags"> <a href="/blog/2026"> <i class="fa-solid fa-calendar fa-sm"></i> 2026 </a>   ·   <a href="/blog/tag/gpu"> <i class="fa-solid fa-hashtag fa-sm"></i> gpu</a>   <a href="/blog/tag/cuda"> <i class="fa-solid fa-hashtag fa-sm"></i> cuda</a>   <a href="/blog/tag/triton"> <i class="fa-solid fa-hashtag fa-sm"></i> triton</a>   <a href="/blog/tag/machine-learning"> <i class="fa-solid fa-hashtag fa-sm"></i> machine-learning</a>   <a href="/blog/tag/pytorch"> <i class="fa-solid fa-hashtag fa-sm"></i> pytorch</a>   ·   <a href="/blog/category/tech"> <i class="fa-solid fa-tag fa-sm"></i> tech</a> </p> </header> <article class="post-content"> <div id="markdown-content"> <h2 id="intro-to-megakernels-and-why-megakernels-">Intro to Megakernels and Why Megakernels ?</h2> <p>If we look at the current GPU execution model and architecture, on actual hardware you have limited set of <code class="language-plaintext highlighter-rouge">SMs (Streaming Multiprocessors)</code> on which blocks of kernels are being scheduled based on the resources used by the kernel. Lets look at some of the strategies we can use to design our megakernel.</p> <ul> <li> <strong>Wave Packing:</strong> By default, kernels on the same <code class="language-plaintext highlighter-rouge">cuda stream</code> run strictly sequentially, forcing the hardware scheduler to execute them in isolated, distinct waves. But if, through some black magic, we can fuse both kernels into a single <code class="language-plaintext highlighter-rouge">megakernel</code>, the scheduler can pack the grid much more efficiently. As shown below, eliminating the strict boundary between the two kernels allows the GPU to overlap their tails and heads—saving an entire execution wave!</li> </ul> <div class="row mt-3"> <div class="col-sm mt-3 mt-md-0"> <figure> <style>
+        /* Hide mermaid gantt chart vertical grid lines */
+        .mermaid .grid, .mermaid .grid-line, .mermaid .tick line {
+          display: none !important;
+        }
+        /* Highlight the second section (optimized) background */
+        .mermaid rect.section.section1 {
+          fill: rgba(6, 137, 173, 0.45) !important; /* Light green */
+        }
+        /* Reduce gap below mermaid diagrams */
+        .mermaid {
+          margin-bottom: -1rem !important;
+        }
+        figure {
+          margin-bottom: 0 !important;
+        }
+        /* Reduce heading sizes to match the original h3/h4 sizes */
+        h2 {
+          font-size: 1.75rem !important;
+        }
+        h3 {
+          font-size: 1.5rem !important;
+        }
+      </style> <div class="mermaid"> gantt title Standard Sequential vs Megakernel Execution (144 SMs) dateFormat X axisFormat %s section Sequential (4 Waves) Kernel A (144 blocks) : 0, 1 Kernel A (56 blocks) : 1, 2 Kernel B (144 blocks) : 2, 3 Kernel B (56 blocks) : 3, 4 section Megakernel (3 Waves) Kernel A (144 blocks) : 0, 1 Kernel A (56) + Kernel B (88) : 1, 2 Kernel B (112 blocks) : 2, 3 </div> </figure> </div> </div> <ul> <li> <strong>TMA Compute Overlap:</strong> The above case assumed you don’t have any data dependency between <code class="language-plaintext highlighter-rouge">Kernel A</code> and <code class="language-plaintext highlighter-rouge">Kernel B</code>, but if you have any dependency you cannot schedule both of them together you’ll have to wait for first kernel to finish. But still if we wish to squeeze the maximum performance we can use <code class="language-plaintext highlighter-rouge">TMA (Tensor Memory Accelerator)</code> to overlap the execution of first kernel with the data loading of second kernel.</li> </ul> <div class="row mt-3"> <div class="col-sm mt-3 mt-md-0"> <figure> <div class="mermaid"> gantt title Standard Dependency vs TMA Overlap dateFormat X axisFormat %s section Standard (Sequential) Kernel A (Compute) : a1, 0, 2 Kernel B (Memory Load) : a2, 2, 3 Kernel B (Compute) : a3, 3, 5 section TMA Overlap Kernel A (Compute) : b1, 0, 2 TMA Load (Kernel B Data): b2, 1, 2 Kernel B (Compute) : b3, 2, 4 </div> </figure> </div> </div> <ul> <li> <strong>TMA Compute Overlap (Finegrained):</strong> But you might ask, How will I load the data if it is not yet ready by <code class="language-plaintext highlighter-rouge">Kernel A</code> ? Well we are dealing with machine learning models each layer has weights + activations, a kernel needs to load both of them before computation, even if we are not able to load the activations we can still prefetch the weights of the next kernel.</li> </ul> <div class="row mt-3"> <div class="col-sm mt-3 mt-md-0"> <figure> <div class="mermaid"> gantt title Finegrained TMA Overlap (Prefetching Weights) dateFormat X axisFormat %s section Standard Kernel A (Compute) : a1, 0, 3 Kernel B (Load Weights) : a2, 3, 4 Kernel B (Load Activations) : a3, 4, 5 Kernel B (Compute) : a4, 5, 7 section TMA Finegrained Kernel A (Compute) : b1, 0, 3 TMA Load (Kernel B Weights) : b2, 1, 3 Kernel B (Load Activations) : b3, 3, 4 Kernel B (Compute) : b4, 4, 6 </div> </figure> </div> </div> <ul> <li> <strong>Launch Overhead:</strong> A kernel launch is not simple a GPU has to setup context for current kernel, clear context of previous kernel, flush the L1/L2 caches and a lot more stuff. Although this takes a couple of microseconds but while doing 1000s of passes we can save a couple of milliseconds of total execution time.</li> </ul> <p>By combining all of these strategies into a single <code class="language-plaintext highlighter-rouge">megakernel</code>, we bypass the standard GPU scheduler and minimize overhead. However, this means we must carefully build our own custom scheduler directly into the kernel, manually managing data dependencies and synchronization across asynchronous execution blocks.</p> <h2 id="why-cute-dsl-">Why CuTe DSL ?</h2> <p>ML systems is going through very intresting times, earlier everything use to be in CUDA C++ but now you have 10 different ways of writing GPU kernels thanks to <code class="language-plaintext highlighter-rouge">DSLs (Domain Specefic Languages)</code>. Majority of DSLs operate on <code class="language-plaintext highlighter-rouge">tile</code> based abstraction where we are only dealing with tile or vector like data. To design a complex kernel with finegrained hardware management <code class="language-plaintext highlighter-rouge">CuTe DSL</code> is the way to go, which gives Python flexiblity + CUDA C++’s low level control and directly compiles to <code class="language-plaintext highlighter-rouge">PTX</code>. I will cover a lot about <code class="language-plaintext highlighter-rouge">CuTe DSL</code> so you can use this as a CuTe DSL guide.</p> <h2 id="implementation-plan">Implementation Plan</h2> <h3 id="gpu-architecture">GPU Architecture</h3> <p>I have access to <code class="language-plaintext highlighter-rouge">RTX 5070 Ti</code> (<code class="language-plaintext highlighter-rouge">sm120</code>) therefore I decided to optimize for the <code class="language-plaintext highlighter-rouge">sm120</code> family of GPUs (RTX Pro 6000, RTX 50 Series and DGX Spark). <code class="language-plaintext highlighter-rouge">sm120</code> the so called <code class="language-plaintext highlighter-rouge">consumer blackwell</code> is an instresting architecture in a sense that it has hardware features from <code class="language-plaintext highlighter-rouge">hopper</code> family like <code class="language-plaintext highlighter-rouge">TMA</code>, also hardware support for block-scaled matrix multiplication (<code class="language-plaintext highlighter-rouge">NVFP4</code>, <code class="language-plaintext highlighter-rouge">MXFP4</code>, etc.) but has warp synchronous tensor cores unlike actual blackwell (<code class="language-plaintext highlighter-rouge">sm100</code> family) which has async tensor cores and <code class="language-plaintext highlighter-rouge">TMEM (Tensor Memory)</code>. There are a lot more differences which we will encounter in the blog series.</p> <h3 id="model-architecture">Model Architecture</h3> <p>Currently focusing on a simple LLaMA-like transformer architecture. As of now, I haven’t included RoPE and the final projection layer from the embedding space to probabilities, currently focusing on the core components of the transformer, will add the rest in future parts.</p> <h3 id="megakernel-implementation">Megakernel Implementation</h3> <p>The kernel wil be a cooperative kernel where the grid size if number of SMs so that each block will be given a single SM. On each block we will have 8 active warps out of that 4 warps</p> </div> </article> <br> <hr> <br> <h2 class="text-3xl font-semibold mb-4 mt-12">Enjoy Reading This Article?</h2> <p class="mb-2">Here are some more articles you might like to read next:</p> <ul class="list-disc pl-7 my-3 space-y-2 marker:text-[var(--global-theme-color)]"> <li class="leading-relaxed"> <a class="underline decoration-1 hover:text-[var(--global-hover-color)]" href="/blog/2026/an-intro-to-arm-sme/">An Intro to ARM SME (Scalable Matrix Engine)</a> </li> </ul> </div> </div> </div> </div> <script>
+  window.alFolio = {
+    compatBootstrap: false
+  };
+</script> <script src="/assets/js/nav-toggle.js?v=141bd79a73ebc0f0b6ea58e440ae79fc"></script> <script defer src="https://cdn.jsdelivr.net/npm/masonry-layout@4.2.2/dist/masonry.pkgd.min.js" integrity="sha256-Nn1q/fx0H7SNLZMQ5Hw5JLaTRZp0yILA/FRexe19VdI=" crossorigin="anonymous"></script> <script defer src="https://cdn.jsdelivr.net/npm/imagesloaded@5.0.0/imagesloaded.pkgd.min.js" integrity="sha256-htrLFfZJ6v5udOG+3kNLINIKh2gvoKqwEhHYfTTMICc=" crossorigin="anonymous"></script> <script defer src="/assets/js/masonry.js?v=e49affc7bd2646f6acdad1dbe02c2359" type="text/javascript"></script> <script defer src="https://cdn.jsdelivr.net/npm/mermaid@10.7.0/dist/mermaid.min.js" integrity="sha256-TtLOdUA8mstPoO6sGvHIGx2ceXrrX4KgIItO06XOn8A=" crossorigin="anonymous"></script> <script defer src="/assets/al_charts/js/mermaid-setup.js" type="text/javascript"></script> <script defer type="text/javascript" id="MathJax-script" src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js" integrity="sha256-MASABpB4tYktI2Oitl4t+78w/lyA+D7b/s9GEP0JOGI=" crossorigin="anonymous"></script> <script src="/assets/al_math/js/mathjax-setup.js"></script> <script defer src="https://cdnjs.cloudflare.com/polyfill/v3/polyfill.min.js?features=es6" crossorigin="anonymous"></script> <script src="/assets/js/tooltips-setup.js?v=fe487e99db6c43751e6e7bdb2d6a0611"></script> <script defer src="https://cdn.jsdelivr.net/npm/tocbot@4.36.4/dist/tocbot.min.js" integrity="sha256-lo/r+jQ81wWrxdIiiiEEd538z4+dTJTt+leOuAS7GCw=" crossorigin="anonymous"></script> <script src="/assets/js/no_defer.js?v=53b1b1a645525975c963ce8bf8bfefcf"></script> <script defer src="/assets/js/common.js?v=87baac90f765f2f3362dcf6aaf312a8a"></script> <script defer src="/assets/js/copy_code.js?v=c8a01c11a92744d44b093fc3bda915df" type="text/javascript"></script> <script defer src="/assets/js/jupyter_new_tab.js?v=896d254890d9b47f0281f63bfccf0dee"></script> <script async src="https://d1bxh8uas1mnw7.cloudfront.net/assets/embed.js"></script> <script async src="https://badge.dimensions.ai/badge.js"></script> <script defer src="https://cdn.jsdelivr.net/npm/medium-zoom@1.1.0/dist/medium-zoom.min.js" integrity="sha256-ZgMyDAIYDYGxbcpJcfUnYwNevG/xi9OHKaR/8GK+jWc=" crossorigin="anonymous"></script> <script defer src="/assets/al_img_tools/js/zoom.js"></script> <script defer src="/assets/js/progress-bar.js?v=499464c5c63ced6cf7ad62509f1e2610" type="text/javascript"></script> <script src="https://cdn.jsdelivr.net/npm/vanilla-back-to-top@7.2.1/dist/vanilla-back-to-top.min.js" integrity="sha256-uMJJ3EoTyfRBoTbR+lrfu1uRQ87RZG8AR3cVNuQVeFg=" crossorigin="anonymous"></script> <script>
+    addBackToTop();
+  </script> <script type="module" src="/assets/al_search/js/search/ninja-keys.min.js"></script> <ninja-keys hidebreadcrumbs noautoloadmdicons placeholder="Type to start searching"></ninja-keys> <script src="/assets/al_search/js/search-setup.js"></script> <script>
+// get the ninja-keys element
+const ninja = document.querySelector('ninja-keys');
+
+// add the home and posts menu items
+ninja.data = [{
+    id: "nav-about",
+    title: "About",
+    section: "Navigation",
+    handler: () => {
+      window.location.href = "/";
+    },
+  },{id: "nav-blog",
+          title: "Blog",
+          description: "",
+          section: "Navigation",
+          handler: () => {
+            window.location.href = "/blog/";
+          },
+        },{id: "nav-publications",
+          title: "Publications",
+          description: "publications by categories in reversed chronological order. generated by jekyll-scholar.",
+          section: "Navigation",
+          handler: () => {
+            window.location.href = "/publications/";
+          },
+        },{id: "nav-projects",
+          title: "Projects",
+          description: "A growing collection of your cool projects.",
+          section: "Navigation",
+          handler: () => {
+            window.location.href = "/projects/";
+          },
+        },{id: "post-an-intro-to-arm-sme-scalable-matrix-engine",
+        
+          title: "An Intro to ARM SME (Scalable Matrix Engine)",
+        
+        description: "Exploring the architecture and performance benefits of ARM's Scalable Matrix Engine.",
+        section: "Posts",
+        handler: () => {
+          
+            window.location.href = "/blog/2026/an-intro-to-arm-sme/";
+          
+        },
+      },{id: "post-beating-torch-compile-with-megakernels-in-cute-dsl-part-1",
+        
+          title: "Beating torch.compile with Megakernels in CuTe DSL [Part 1]",
+        
+        description: "A deep dive into custom GPU kernels and how they can outperform torch.compile.",
+        section: "Posts",
+        handler: () => {
+          
+            window.location.href = "/blog/2026/beating-torch-compile-with-megakernels/";
+          
+        },
+      },{id: "books-the-godfather",
+          title: 'The Godfather',
+          description: "",
+          section: "Books",handler: () => {
+              window.location.href = "/books/the_godfather/";
+            },},{id: "news-a-simple-inline-announcement",
+          title: 'A simple inline announcement.',
+          description: "",
+          section: "News",},{id: "news-a-long-announcement-with-details",
+          title: 'A long announcement with details',
+          description: "",
+          section: "News",handler: () => {
+              window.location.href = "/news/announcement_2/";
+            },},{id: "news-a-simple-inline-announcement-with-markdown-emoji-sparkles-smile",
+          title: 'A simple inline announcement with Markdown emoji! <img class="emoji" title=":sparkles:" alt=":sparkles:" src="https://github.githubassets.com/images/icons/emoji/unicode/2728.png" height="20" width="20"> <img class="emoji" title=":smile:" alt=":smile:" src="https://github.githubassets.com/images/icons/emoji/unicode/1f604.png" height="20" width="20">',
+          description: "",
+          section: "News",},{id: "projects-project-1",
+          title: 'project 1',
+          description: "with background image",
+          section: "Projects",handler: () => {
+              window.location.href = "/projects/1_project/";
+            },},{id: "projects-project-2",
+          title: 'project 2',
+          description: "a project with a background image and giscus comments",
+          section: "Projects",handler: () => {
+              window.location.href = "/projects/2_project/";
+            },},{id: "projects-project-3-with-very-long-name",
+          title: 'project 3 with very long name',
+          description: "a project that redirects to another website",
+          section: "Projects",handler: () => {
+              window.location.href = "/projects/3_project/";
+            },},{id: "projects-project-4",
+          title: 'project 4',
+          description: "another without an image",
+          section: "Projects",handler: () => {
+              window.location.href = "/projects/4_project/";
+            },},{id: "projects-project-5",
+          title: 'project 5',
+          description: "a project with a background image",
+          section: "Projects",handler: () => {
+              window.location.href = "/projects/5_project/";
+            },},{id: "projects-project-6",
+          title: 'project 6',
+          description: "a project with no image",
+          section: "Projects",handler: () => {
+              window.location.href = "/projects/6_project/";
+            },},{id: "projects-project-7",
+          title: 'project 7',
+          description: "with background image",
+          section: "Projects",handler: () => {
+              window.location.href = "/projects/7_project/";
+            },},{id: "projects-project-8",
+          title: 'project 8',
+          description: "an other project with a background image and giscus comments",
+          section: "Projects",handler: () => {
+              window.location.href = "/projects/8_project/";
+            },},{id: "projects-project-9",
+          title: 'project 9',
+          description: "another project with an image 🎉",
+          section: "Projects",handler: () => {
+              window.location.href = "/projects/9_project/";
+            },},{id: "teachings-data-science-fundamentals",
+          title: 'Data Science Fundamentals',
+          description: "This course covers the foundational aspects of data science, including data collection, cleaning, analysis, and visualization. Students will learn practical skills for working with real-world datasets.",
+          section: "Teachings",handler: () => {
+              window.location.href = "/teachings/data-science-fundamentals/";
+            },},{id: "teachings-introduction-to-machine-learning",
+          title: 'Introduction to Machine Learning',
+          description: "This course provides an introduction to machine learning concepts, algorithms, and applications. Students will learn about supervised and unsupervised learning, model evaluation, and practical implementations.",
+          section: "Teachings",handler: () => {
+              window.location.href = "/teachings/introduction-to-machine-learning/";
+            },},{
+        id: 'social-email',
+        title: 'email',
+        section: 'Socials',
+        handler: () => {
+          window.open("mailto:%70%61%72%74%68%62%61%64%67%75%6A%61%72%35%37@%67%6D%61%69%6C.%63%6F%6D", "_blank");
+        },
+      },{
+        id: 'social-github',
+        title: 'GitHub',
+        section: 'Socials',
+        handler: () => {
+          window.open("https://github.com/Parth-Badgujar", "_blank");
+        },
+      },{
+        id: 'social-x',
+        title: 'X',
+        section: 'Socials',
+        handler: () => {
+          window.open("https://twitter.com/SimplyRockets", "_blank");
+        },
+      },{
+        id: 'social-linkedin',
+        title: 'LinkedIn',
+        section: 'Socials',
+        handler: () => {
+          window.open("https://www.linkedin.com/in/parth-badgujar", "_blank");
+        },
+      },{
+      id: 'light-theme',
+      title: 'Change theme to light',
+      description: 'Change the theme of the site to Light',
+      section: 'Theme',
+      handler: () => {
+        setThemeSetting("light");
+      },
+    },
+    {
+      id: 'dark-theme',
+      title: 'Change theme to dark',
+      description: 'Change the theme of the site to Dark',
+      section: 'Theme',
+      handler: () => {
+        setThemeSetting("dark");
+      },
+    },
+    {
+      id: 'system-theme',
+      title: 'Use system default theme',
+      description: 'Change the theme of the site to System Default',
+      section: 'Theme',
+      handler: () => {
+        setThemeSetting("system");
+      },
+    },];
+
+</script> <script src="/assets/al_search/js/shortcut-key.js"></script> </body> </html>
