@@ -1,6 +1,6 @@
 ---
 layout: post
-title: Beating torch.compile with Megakernels in CuTe DSL [Part 1]
+title: Beating torch.compile with Megakernels in CuTe DSL
 date: 2026-07-05 08:00:00
 description: A deep dive into custom GPU kernels and how they can outperform torch.compile.
 tags: [gpu, cuda, triton, machine-learning, pytorch]
@@ -10,131 +10,251 @@ mermaid:
 toc:
   sidebar: left
 ---
+<style>
+  h2 {
+    font-size: 1.5rem !important;
+  }
+  h3 {
+    font-size: 1.25rem !important;
+  }
+  .highlight pre,
+  .highlight code,
+  pre code {
+    font-size: 0.8rem !important;
+    line-height: 1.45 !important;
+  }
+</style>
+
+*Prior NVIDIA GPU related knowledge is needed before going through this blog. If you're new to the topic, [Modal GPU Glossary](https://modal.com/gpu-glossary) is a great place to start!*
 
 ## Intro to Megakernels and Why Megakernels ?
 
-If we look at the current GPU execution model and architecture, on actual hardware you have limited set of `SMs (Streaming Multiprocessors)` on which blocks of kernels are being scheduled based on the resources used by the kernel. Lets look at some of the strategies we can use to design our megakernel.
+Normally when you run any PyTorch model without any optimizations it runs in `eager` mode, which means each operation is dispatched one by one to the GPU. Adding optimization like `torch.compile` performs operator fusion to reduce the number of kernel launches and improves data-reuse in operations but still you have multiple kernel launches in single forward pass. In megakernels the goal is fuse all operations into a `single` kernel launch.
 
-* **Wave Packing:** By default, kernels on the same `cuda stream` run strictly sequentially, forcing the hardware scheduler to execute them in isolated, distinct waves. But if, through some black magic, we can fuse both kernels into a single `megakernel`, the scheduler can pack the grid much more efficiently. As shown below, eliminating the strict boundary between the two kernels allows the GPU to overlap their tails and heads—saving an entire execution wave!
+On the current GPU execution model, on actual hardware you have a limited set of `SMs (Streaming Multiprocessors)` on which blocks of kernels are being scheduled based on the hardware resources used by each block. We'll first device some strategies to design the megakernel.
 
-<div class="row mt-3">
+### Wave Packing
+
+When a kernel has higher number of blocks than SMs can fit, the scheduler launches waves of blocks across all SMs. Say you have kernel with `200 blocks` but the GPU only has `148 SMs`, assuming occupancy of `1 block / SM` it will launch `ceil(200/148) = 2 waves`, so the last wave will only execute `200 % 148 = 52 blocks`, so the remaining `96 SMs` are essentially idle. This is know as `wave quantization`.
+
+<div class="row mt-3 mb-4">
   <div class="col-sm mt-3 mt-md-0">
     <figure>
-      <style>
-        /* Hide mermaid gantt chart vertical grid lines */
-        .mermaid .grid, .mermaid .grid-line, .mermaid .tick line {
-          display: none !important;
-        }
-        /* Highlight the second section (optimized) background */
-        .mermaid rect.section.section1 {
-          fill: rgba(6, 137, 173, 0.45) !important; /* Light green */
-        }
-        /* Reduce gap below mermaid diagrams */
-        .mermaid {
-          margin-bottom: -1rem !important;
-        }
-        figure {
-          margin-bottom: 0 !important;
-        }
-        /* Reduce heading sizes to match the original h3/h4 sizes */
-        h2 {
-          font-size: 1.75rem !important;
-        }
-        h3 {
-          font-size: 1.5rem !important;
-        }
-      </style>
-      <div class="mermaid">
-      gantt
-          title Standard Sequential vs Megakernel Execution (144 SMs)
-          dateFormat  X
-          axisFormat %s
-
-          section Sequential (4 Waves)
-          Kernel A (144 blocks) : 0, 1
-          Kernel A (56 blocks)  : 1, 2
-          Kernel B (144 blocks) : 2, 3
-          Kernel B (56 blocks)  : 3, 4
-
-          section Megakernel (3 Waves)
-          Kernel A (144 blocks)         : 0, 1
-          Kernel A (56) + Kernel B (88) : 1, 2
-          Kernel B (112 blocks)         : 2, 3
-      </div>
+      <img src="/assets/img/megakernels/fused_AB_light.excalidraw.svg" class="img-fluid only-light" alt="Standard Dependency vs TMA Overlap">
+      <img src="/assets/img/megakernels/fused_AB_dark.excalidraw.svg" class="img-fluid only-dark" alt="Standard Dependency vs TMA Overlap">
     </figure>
   </div>
 </div>
 
-* **TMA Compute Overlap:** The above case assumed you don't have any data dependency between `Kernel A` and `Kernel B`, but if you have any dependency you cannot schedule both of them together you'll have to wait for first kernel to finish. But still if we wish to squeeze the maximum performance we can use `TMA (Tensor Memory Accelerator)` to overlap the execution of first kernel with the data loading of second kernel.
+Now assume you have two such kernels launched in a sequential manner on the same `cuda stream`, both of them will have extra waves. Through some black magic, if we are able to combine the execution of both kernels together, we can save a complete wave in theory and gain some free lunch.
 
-<div class="row mt-3">
+### Load/Store/Compute Overlap using TMA 
+
+After scheduling the waves properly, to squeeze out maximum performance, we can use `TMA (Tensor Memory Accelerator)` to `async load` the data required in the next wave while we are performing the compute of the current wave. Similarly, we can use TMA to perform `async stores` so that the next wave can run while the current store operation completes. This essentially hides the complete latency of load/store behind compute similar to SoTA `matmul` kernels.
+
+<div class="row mt-3 mb-4">
   <div class="col-sm mt-3 mt-md-0">
     <figure>
-      <div class="mermaid">
-      gantt
-          title Standard Dependency vs TMA Overlap
-          dateFormat  X
-          axisFormat %s
-
-          section Standard (Sequential)
-          Kernel A (Compute)      : a1, 0, 2
-          Kernel B (Memory Load)  : a2, 2, 3
-          Kernel B (Compute)      : a3, 3, 5
-
-          section TMA Overlap
-          Kernel A (Compute)      : b1, 0, 2
-          TMA Load (Kernel B Data): b2, 1, 2
-          Kernel B (Compute)      : b3, 2, 4
-      </div>
+      <img src="/assets/img/megakernels/load_overlap_light.excalidraw.svg" class="img-fluid only-light" alt="Standard Dependency vs TMA Overlap">
+      <img src="/assets/img/megakernels/load_overlap_dark.excalidraw.svg" class="img-fluid only-dark" alt="Standard Dependency vs TMA Overlap">
     </figure>
   </div>
 </div>
 
-* **TMA Compute Overlap (Finegrained):** But you might ask, How will I load the data if it is not yet ready by `Kernel A` ? Well we are dealing with machine learning models each layer has weights + activations, a kernel needs to load both of them before computation, even if we are not able to load the activations we can still prefetch the weights of the next kernel.
+### TMA Compute Overlap (Finegrained) 
 
-<div class="row mt-3">
+The above cases assumed you don't have data dependency between kernels, but otherwise you cannot directly schedule them in parallel, `Kernel B` will require the output of `Kernel A` to be ready before it starts loading. But as we are dealing with machine learning models which have `weights + activations`, we can still prefetch the weights while the activations are not ready and overlap the load with compute.
+
+<div class="row mt-3 mb-4">
   <div class="col-sm mt-3 mt-md-0">
     <figure>
-      <div class="mermaid">
-      gantt
-          title Finegrained TMA Overlap (Prefetching Weights)
-          dateFormat  X
-          axisFormat %s
-
-          section Standard
-          Kernel A (Compute)          : a1, 0, 3
-          Kernel B (Load Weights)     : a2, 3, 4
-          Kernel B (Load Activations) : a3, 4, 5
-          Kernel B (Compute)          : a4, 5, 7
-
-          section TMA Finegrained
-          Kernel A (Compute)          : b1, 0, 3
-          TMA Load (Kernel B Weights) : b2, 1, 3
-          Kernel B (Load Activations) : b3, 3, 4
-          Kernel B (Compute)          : b4, 4, 6
-      </div>
+      <img src="/assets/img/megakernels/finegrained_overlap_light.excalidraw.svg" class="img-fluid only-light" alt="Standard Dependency vs TMA Overlap">
+      <img src="/assets/img/megakernels/finegrained_overlap_dark.excalidraw.svg" class="img-fluid only-dark" alt="Standard Dependency vs TMA Overlap">
     </figure>
   </div>
 </div>
 
-* **Launch Overhead:** A kernel launch is not simple a GPU has to setup context for current kernel, clear context of previous kernel, flush the L1/L2 caches and a lot more stuff. Although this takes a couple of microseconds but while doing 1000s of passes we can save a couple of milliseconds of total execution time.
+### Launch Overhead
+A kernel launch is not simple a GPU has to setup context for current kernel, clear context of previous kernel, flush the L1/L2 caches and a lot more stuff. Although this takes a couple of microseconds but while doing 100s of passes we can save a couple of milliseconds of total execution time.
 
 By combining all of these strategies into a single `megakernel`, we bypass the standard GPU scheduler and minimize overhead. However, this means we must carefully build our own custom scheduler directly into the kernel, manually managing data dependencies and synchronization across asynchronous execution blocks.
-
-## Why CuTe DSL ?
-
-ML systems is going through very intresting times, earlier everything use to be in CUDA C++ but now you have 10 different ways of writing GPU kernels thanks to `DSLs (Domain Specefic Languages)`. Majority of DSLs operate on `tile` based abstraction where we are only dealing with tile or vector like data. To design a complex kernel with finegrained hardware management `CuTe DSL` is the way to go, which gives Python flexiblity + CUDA C++'s low level control and directly compiles to `PTX`. I will cover a lot about `CuTe DSL` so you can use this as a CuTe DSL guide.
 
 
 ## Implementation Plan
 
 ### GPU Architecture
-I have access to `RTX 5070 Ti` (`sm120`) therefore I decided to optimize for the `sm120` family of GPUs (RTX Pro 6000, RTX 50 Series and DGX Spark). `sm120` the so called `consumer blackwell` is an instresting architecture in a sense that it has hardware features from `hopper` family like `TMA`, also hardware support for block-scaled matrix multiplication (`NVFP4`, `MXFP4`, etc.) but has warp synchronous tensor cores unlike actual blackwell (`sm100` family) which has async tensor cores and `TMEM (Tensor Memory)`. There are a lot more differences which we will encounter in the blog series.
+I have access to an `RTX 5070 Ti` (`sm120`), so I decided to optimize for the `sm120` family of GPUs (RTX Pro 6000, RTX 50 Series, and DGX Spark). `sm120`, the so-called "consumer Blackwell," is an interesting architecture in the sense that it borrows hardware features from the `Hopper` family like `TMA`, and also has hardware support for block-scaled matrix multiplication (`NVFP4`, `MXFP4`, etc.), but uses warp-synchronous tensor cores unlike actual Blackwell (`sm100` family) which has async tensor cores and `TMEM (Tensor Memory)`. Apart from the above, there are a lot more differences we'll encounter.
 
 ### Model Architecture
 
-Currently focusing on a simple LLaMA-like transformer architecture. As of now, I haven't included RoPE and the final projection layer from the embedding space to probabilities, currently focusing on the core components of the transformer, will add the rest in future parts.
+* Currently focusing on a simple LLaMA-like (RMSNorm + SwiGLU) transformer architecture. As of now, I haven't included RoPE and the final projection layer from the embedding space to probabilities, currently focusing on the core components of the transformer, will add the rest in future parts. 
+* This kernel isn't for direct decode style inference as we have to perform `split-K GEMV` and `split-K attention (flash decoding)` for efficient KV-Cache based decoding. Here I am doing a simple transformer forward pass with KV calculation (without any past KV cache) in compute-bound regime, to showcase the performance benefits. Though the techniques can still be applied to single batch decode kernels.
 
-### Megakernel Implementation
+### Why CuTe DSL?
 
-The kernel wil be a cooperative kernel where the grid size if number of SMs so that each block will be given a single SM. On each block we will have 8 active warps out of that 4 warps 
+Majority of DSLs operate on `tile` based abstraction where we are only dealing with tile or vector like data. To design a complex kernel with finegrained hardware management `CuTe DSL` is the way to go, which gives Python flexiblity + CUDA C++'s low level control and directly compiles to `PTX`. I will cover a lot about `CuTe DSL` and kernel profiling in next parts.
+
+## Megakernel Implementation  
+
+### Cooperative Kernel
+
+We launch the megakernel with `gridSize == num SMs`, allocating one block per SM. Each block decodes instructions from global memory, where each instruction represents a unit of `work` containing an operator name (e.g. rmsnorm, matmul, attention) along with arguments like `blockIdx.x`, `blockIdx.y`, and `blockIdx.z` as if the operators were launched as separate kernels. We pre-schedule all instructions in order and assign operator blocks to actual kernel blocks. At runtime, each block reads its assigned instruction and calls the corresponding operator accordingly.
+
+```python
+@cute.kernel
+def kernel(max_works, mSchedule):
+    block_idx = cute.arch.block_idx()[0]
+    for work_idx in range(max_works):
+        layer_idx    = mSchedule[block_id, work_idx, 0]
+        op_kind      = mSchedule[block_id, work_idx, 1]
+        pid_m        = mSchedule[block_id, work_idx, 2]
+        pid_n        = mSchedule[block_id, work_idx, 3]
+        pid_o        = mSchedule[block_id, work_idx, 4]
+        expected_cnt = mSchedule[block_id, work_idx, 5]
+        current_idx  = mSchedule[block_id, work_idx, 6]
+        next_idx     = mSchedule[block_id, work_idx, 7]
+  
+        if op_kind == int(Op.RMS):
+            ...
+        elif op_kind == int(Op.QKV):
+            ... 
+        elif op_kind == int(Op.ATTN):
+            ...
+        elif op_kind == int(Op.OUT):
+            ...
+        elif op_kind == int(Op.UP):
+            ...
+        elif op_kind == int(Op.GATE):
+            ...
+        elif op_kind == int(Op.DOWN):
+            ...
+```
+### Dependecy Management and Scheduling
+
+The scheduling is done in a simple round robin way across the SMs. 
+For eg. we have 8 RMS Norm blocks --> 12 Matmul block --> 8 Attention blocks to be scheduled on 5 SMs we would create the `mSchedule` so that it follows the below diagram. 
+
+<div class="row mt-3 mb-4">
+  <div class="col-sm mt-3 mt-md-0">
+    <figure>
+      <img src="/assets/img/megakernels/rr_blocks_light.excalidraw.svg" class="img-fluid only-light" alt="Standard Dependency vs TMA Overlap">
+      <img src="/assets/img/megakernels/rr_blocks_dark.excalidraw.svg" class="img-fluid only-dark" alt="Standard Dependency vs TMA Overlap">
+    </figure>
+  </div>
+</div>
+
+This eliminates `wave quantization` bubbles and the double warpgroup ping-pong eliminates the compute bubbles and hides maximum load/store latency. But we cannot directly schedule the blocks we have to make sure that the previous output is ready. 
+
+We can manage dependencies using an `atomic counter`. For each block, we first identify all its parent dependencies. When a parent block finishes its computation, it increments the atomic counter at its `next_idx` by 1. The current block polls the atomic counter at its `current_idx`, and as soon as it reaches the predetermined value `expected_cnt`, it begins execution. At the end, each block increments the counter at its own `next_idx` to unblock downstream blocks.
+
+<div class="row mt-3 mb-4 justify-content-center">
+  <div class="col-sm-8 mt-3 mt-md-0">
+    <figure>
+      <img src="/assets/img/megakernels/atomic_demo_light.excalidraw.svg" class="img-fluid only-light" alt="Standard Dependency vs TMA Overlap">
+      <img src="/assets/img/megakernels/atomic_demo_dark.excalidraw.svg" class="img-fluid only-dark" alt="Standard Dependency vs TMA Overlap">
+    </figure>
+  </div>
+</div>
+
+### Warpgroup Scheduling and Pipelineing
+Each SM can run a maximum of 32 warps (1024 threads), but it can only schedule `4 warps (single warpgroup)` at a time to the actual hardware. Taking that into consideration, we launch 2 warpgroups (= 8 warps) so that while one warpgroup (`wg-1`) is doing its compute, the other warpgroup (`wg-2`) can asynchronously load the data and wait for `wg-1`. As soon as `wg-1` finishes, `wg-2` starts its compute while `wg-1` begins loading data for the next operation similar to ping-pong `matmul` kernels. 
+
+<div class="row mt-3 mb-4">
+  <div class="col-sm mt-3 mt-md-0">
+    <figure>
+      <img src="/assets/img/megakernels/mm_handoff_light.excalidraw.svg" class="img-fluid only-light" alt="Matmul warpgroup handoff">
+      <img src="/assets/img/megakernels/mm_handoff_dark.excalidraw.svg" class="img-fluid only-dark" alt="Matmul warpgroup handoff">
+    </figure>
+  </div>
+</div>
+
+The above example illustrates a two stage matmul with ping-pong warpgroups. To enable the above logic we can alternate the `work` assigned to each block between warpgroups by modifying the code in the following way: 
+
+```python
+@cute.kernel
+def kernel(max_works, mSchedule):
+    block_idx = cute.arch.block_idx()[0]
+    warp_id    = cute.arch.warp_idx()
+    group_id   = warp_id // 4
+
+    for local_work_idx in range(max_works // 2):
+        work_idx = local_work_idx * 2 + group_id
+        ...   
+```
+
+The async load/store handoff logic is written inside each operator. The entire architecture uses **Ampere-style two-stage pipelining with TMA**, two warpgroups operate in ping-pong fashion where **only one** warpgroup is actively computing while the other asynchronously loads data for the next operation. No warp specialization is used, both warpgroups are identical and simply alternate stages with proper barrier handoff and async stores.
+
+I initially considered warp specialization, but chose against it we are already at the brink of register overflow, and dedicating warps to producer/consumer roles would likely push us over. But at the end the kernel used only 233 registers per thread.
+
+### Shared Memory Layout
+
+The `sm120` architecture provides `99 KiB` of max usable shared memory per SM. To ensure smooth, non-blocking handoff between operators, the shared memory is statically partitioned into three regions:
+
+| Region | Size | Purpose |
+|--------|------|---------|
+| `stage0` buffer | 32 KiB | Active input tile for the computing warpgroup |
+| `stage1` buffer | 32 KiB | Prefetch buffer for the next warpgroup's input |
+| `output` buffer | 34 KiB | Stores the result of the current operation |
+| `mbarriers` + misc | 1 KiB | Barrier objects and miscellaneous metadata |
+
+While one warpgroup computes using `stage0`, the other prefetches into `stage1`. On the next iteration they swap, this is the classic ping-pong pattern extended uniformly across all operators. Each operator's input tiles must fit within the 32 KiB upper limit of a single stage buffer.
+
+Note that `sm120` does **not** support TMA Swizzled Stores unlike the `sm100` architecture, so we add **16 bytes of padding per row** to the output tiles stored in shared memory to prevent bank conflicts during the store phase.
+
+* **Matmul:** Each stage holds both the A and B tiles in `fp16`. With $\mathrm{blockM} = 64$, $\mathrm{blockN} = 128$, and $\mathrm{blockK} = 64$:
+
+  $$\mathrm{A\ tile} = \mathrm{blockM} \times \mathrm{blockK} \times 2\,\mathrm{B} = 64 \times 64 \times 2 = 8 \;\mathrm{KiB}$$
+
+  $$\mathrm{B\ tile} = \mathrm{blockK} \times \mathrm{blockN} \times 2\,\mathrm{B} = 64 \times 128 \times 2 = 16 \;\mathrm{KiB}$$
+
+  $$\mathrm{Stage\ Size} = 8 + 16 = 24 \;\mathrm{KiB} \leq 32 \;\mathrm{KiB}$$
+
+  The matrix multiply accumulates in `float32` registers but the result is cast back to `fp16` before being written to shared memory, so the output footprint uses 2 bytes per element rather than 4. With 16-byte row padding:
+
+  $$\mathrm{Output\ tile} = \mathrm{blockM} \times (\mathrm{blockN} \times 2\,\mathrm{B} + 16\,\mathrm{B}) = 64 \times 272 = 17408 \;\mathrm{B} = 17 \;\mathrm{KiB} \leq 34 \;\mathrm{KiB}$$
+
+* **Attention:** I have used Flash Attention v2 like approach, where each stage holds the Q, K, and V tiles. With $\mathrm{blockQ} = 64$, $d_{\mathrm{head}} = 128$, and $\mathrm{blockKV} = 64$ in `fp16`, each tile occupies:
+
+  $$\mathrm{Q\ tile} = \mathrm{blockQ} \times d_{\mathrm{head}} \times 2\,\mathrm{B} = 64 \times 128 \times 2 = 16 \;\mathrm{KiB}$$
+
+  $$\mathrm{K\ tile} = \mathrm{blockKV} \times d_{\mathrm{head}} \times 2\,\mathrm{B} = 64 \times 128 \times 2 = 16 \;\mathrm{KiB}$$
+
+  $$\mathrm{V\ tile} = \mathrm{blockKV} \times d_{\mathrm{head}} \times 2\,\mathrm{B} = 64 \times 128 \times 2 = 16 \;\mathrm{KiB}$$
+
+  However, Q and V are `aliased` in shared memory, Q is loaded once at the start of the attention loop using `cp.async` / `LDGSTS` instruction and is completely loaded into registers after that, so its buffer is reused for V during the K/V streaming phase. At any point during the loop, a single stage holds:
+
+  $$\mathrm{Stage\ Size} = \underbrace{16 \;\mathrm{KiB}}_{\mathrm{Q/V\ (aliased)}} + \underbrace{16 \;\mathrm{KiB}}_{\mathrm{K}} = 32 \;\mathrm{KiB} \leq 32 \;\mathrm{KiB}$$
+
+  The attention output with row padding:
+
+  $$\mathrm{O\ tile} = \mathrm{blockQ} \times (d_{\mathrm{head}} \times 2\,\mathrm{B} + 16\,\mathrm{B}) = 64 \times 272 = 17{,}408 \;\mathrm{B} = 17 \;\mathrm{KiB} \leq 34 \;\mathrm{KiB}$$
+
+  The attention kernel itself is not multi-stage, the KV loop operates within a single stage buffer, but overlaps memory and compute by loading V while the `Q @ K^T matmul` executes, and loading the next K tile while the `P @ V matmul` executes. The two-stage ping-pong only applies across operators: once attention finishes, the next operation begins on the other stage.
+
+  <div class="row mt-3 mb-4">
+    <div class="col-sm mt-3 mt-md-0">
+      <figure>
+        <img src="/assets/img/megakernels/ma_handoff_light.excalidraw.svg" class="img-fluid only-light" alt="Matmul warpgroup handoff">
+        <img src="/assets/img/megakernels/ma_handoff_dark.excalidraw.svg" class="img-fluid only-dark" alt="Matmul warpgroup handoff">
+      </figure>
+    </div>
+  </div>
+
+* **RMSNorm:** The row-parallel work distribution is designed to maximize strong scaling across SMs. For N rows, each block is assigned `prev_power_of_two(N / num_sms)` rows to ensure even work distribution. Within each block, a `warps_per_row` parameter controls how many of the 4 available warps cooperate on normalizing a single row, for instance, `warps_per_row = 2` means two rows are in compute simultaneously, each processed by 2 warps. These rows are again two-stage pipelined, one set of rows is being normalized while the next set is being loaded asynchronously 
+    <div class="row mt-3 mb-4">
+      <div class="col-sm mt-3 mt-md-0">
+        <figure>
+          <img src="/assets/img/megakernels/rr_handoff_light.excalidraw.svg" class="img-fluid only-light" alt="Matmul warpgroup handoff">
+          <img src="/assets/img/megakernels/rr_handoff_dark.excalidraw.svg" class="img-fluid only-dark" alt="Matmul warpgroup handoff">
+        </figure>
+      </div>
+    </div>
+
+Although I have adopted for static shared memory layout you can refer to megakernel by Hazy Research where they have implemented a page based shared memory allocator where each page is 16 KiB and allocated during runtime. But in my case I thought static might be simple with two stages instead of adding extra allocator. Initially I had tried with three stages but that limits the size of `matmul` stages and reduced performance in compute bound regions so I reverted to two stages.
+
+### Synchronization 
+
+To manage such pipeline thereare mainly three barriers namely `input_barrier`, `compute_barrier` and `output_barrier` per warpgroup and an additional set of `load_barrier` one for each stage, in total we have 2x3 + 1x2 = 8 barriers, all of them are `mbarrier` where threads can arrive, wait for other threads or wait for memory transactions.
+
+#### Input Barrier
+ test 
