@@ -44,7 +44,11 @@
 .highlight .cp {
   color: #8b949e;
   font-weight: bold;
-} /* Comment.Preproc */ /* Comment.PreprocFile */ /* Comment.Single */ /* Comment.Special */ /* Generic.Deleted */
+} /* Comment.Preproc */ /* Comment.PreprocFile */
+.highlight .c1 {
+  color: #8b949e;
+  font-style: italic;
+} /* Comment.Single */ /* Comment.Special */ /* Generic.Deleted */
 .highlight .ge {
   color: #e6edf3;
   font-style: italic;
