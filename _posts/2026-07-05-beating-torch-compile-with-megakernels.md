@@ -31,7 +31,7 @@ toc:
 
 Normally when you run any PyTorch model without any optimizations it runs in `eager` mode, which means each operation is dispatched one by one to the GPU. Adding optimization like `torch.compile` performs operator fusion to reduce the number of kernel launches and improves data-reuse in operations but still you have multiple kernel launches in single forward pass. In megakernels the goal is fuse all operations into a `single` kernel launch.
 
-On the current GPU execution model, on actual hardware you have a limited set of `SMs (Streaming Multiprocessors)` on which blocks of kernels are being scheduled based on the hardware resources used by each block. We'll first device some strategies to design the megakernel.
+In the current GPU execution model, on actual hardware you have a limited set of `SMs (Streaming Multiprocessors)` on which blocks of kernels are being scheduled based on the hardware resources used by each block. We'll first device some strategies to design the megakernel.
 
 ### Wave Packing
 
@@ -256,5 +256,33 @@ Although I have adopted for static shared memory layout you can refer to megaker
 
 To manage such pipeline thereare mainly three barriers namely `input_barrier`, `compute_barrier` and `output_barrier` per warpgroup and an additional set of `load_barrier` one for each stage, in total we have 2x3 + 1x2 = 8 barriers, all of them are `mbarrier` where threads can arrive, wait for other threads or wait for memory transactions.
 
-#### Input Barrier
- test 
+As there are barriers for each warpgroup I have named them `input_bar_me` (current warpgroup) and `input_bar_ot` (other warpgroup), same scheme for `output_barrier` and `compute_barrier`. 
+
+* **input_barrier**: Sits at the very start of the operator. We wait on the barrier (`input_bar_me`) until the other warpgroup arrives on its `input_bar_ot`. It signals the warpgroup that the input stage is released and now its ready to start loading data. After the barrier there is a `load_stage` variable in shared memory which is the stage to be used in the current iteration. It is guaranteed to be updated as the other warpgroup arrives on `input_bar_ot` after the stage is written in shared memory. 
+
+* **compute_barrier**: `input_barrier` only guarantees that the `load_stage` is released but it doesn't guarentee that the other stage is released or not. Therefore another barrier is required to signal that all stages are now released. Based on the operation we can place it just before loading the next pipeline stage. 
+
+* **output_barrier:** `output_barrier` guarentees that the output buffer is released so the `wait(output_bar_me)` is placed jut before writing anything to the output buffer and `arrive(output_bar_ot)` is placed after the output is fully stored from SMEM to GMEM.
+
+* **Atomic Spin Lock**: Just after the `input_barrier` a single thread spins on the `current_idx` of the atomic array untill its value reaches `expected_cnt`. 
+
+```python
+@dataclass
+class PipelineMeta:
+    current_idx: int
+    next_idx: int
+    expected_cnt: int
+
+if group_tid == 0: #group_tid = local thread index of the warpgroup
+    ready = 0
+    while ready != pipeline.expected_cnt:
+        ready = ld_acquire_u32((mAtomics.iterator + pipeline.current_idx).toint())
+warpgroup_sync()
+```
+
+These are the main concepts used in the kernel, after this the remaining part is working with CuTe DSL to actually implement the code, profiling kernels and benchmarking. I haven't directly arrived at this architecture it took multiple iterations, erros, race-conditions which were needed to be fixed, I'll handle those nuances while explainig the coding section.
+
+## Profiling the Megakernel
+
+
+## Benchmarks. 
