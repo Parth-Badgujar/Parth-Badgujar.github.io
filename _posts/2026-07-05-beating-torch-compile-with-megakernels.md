@@ -553,36 +553,55 @@ You can build super complex MMA Layouts using `permutation_mnk` this github thre
 
 
 
-## Profiling 
+## Profiling
 
-This is the juicy part where you will spend most of your time while writing kernels. `Modal` doesn't support profiling with `nsight-compute` you can use `lightning.ai` instead. I will focus on the main parts which you have to look at while profiling. Firstly compile the cute dsl kernels with `os.environ["CUTEDSL_EXPORT_LINEINFO"] = "1"` to get the source mappings with SASS and PTX. In the source view create a split with source on the left and PTX on the right. 
+Profiling is where most of the kernel-development time goes. Modal does not support profiling with `nsight-compute`, so you can use `lightning.ai` instead. Before profiling, compile the CuTe DSL kernels with `os.environ["CUTEDSL_EXPORT_LINEINFO"] = "1"` to preserve the source mappings for SASS and PTX. In the source view, place the source on the left and the PTX on the right.
 
 ### Bank Conflicts
 
-This is the most important free lunch you can have, there are already great posts on bank conflicts <cite them> you can refer to them. In nsight-compute to identify bank conflicts you can either look at the PM-Sampling (Ampere+) in the `L1 Hit Miss` section you can see the distribution of bank conflicts across the timeline of the kernel. 
+Bank conflicts are one of the most valuable sources of low-cost performance improvements. There are already great posts on bank conflicts <cite them> that are worth reading. In Nsight Compute, use PM Sampling (Ampere+) in the `L1 Hit Miss` section to inspect the distribution of bank conflicts across the kernel timeline.
 
 ![Bank Conflicts Timeline](/assets/img/megakernels/bank_conflicts.svg)
 
-In the latest versions NVIDIA also added `Function Stats Window`, you can select the specefic timeline where you are seeing the bank conflicts and the `Function Stats Window` will highlight the exact lines where most of the instruction in that selected timeline were executed. It becomes very easy to track bank conflicts using this tool. Next to get to exact line you can open the `Source` tab and look specefically at the part where `L1 Shared Excessive Wavefronts` is more than 0% it directly indicates bank conflicts. 
+Recent versions of Nsight Compute also include the `Function Stats Window`. Select the timeline region where conflicts occur, and the window highlights the source lines responsible for most of the instructions in that region. Then open the `Source` tab and look for locations where `L1 Shared Excessive Wavefronts` is above 0%; this directly indicates bank conflicts.
 
-Next you have to look at the LDG instructions to check where `cute.autovec_copy` actually used the new 256B instructions or not. 
+### Vectorized Memory Operations
 
-Another highlight in the atomic spin lock polling loop the `ptxas` compiler automatically introduced `yeild` instruction. This deprioritizes the current warp because it is waiting for counter to reach a certain value, and the scheduler doesn't want to waste the resources on this warp.
+Inspect the LDG instructions to verify where `cute.autovec_copy` uses the newer 256B memory operations.
 
-Next you also have to look at the compute and memory throughput, if memory throughput is very high it means you are not using the L2 cache effectivly (thats why we do the L2 cache aware tiling in SoTa matmul kernels) or you are performing some memory bound operation. The current kernel is compute bound so increase in compute throughput directly increases the performance. 
+### Spin-Loop Scheduling
 
-Make sure that you are not spilling registers. Spilled registers go to `local memory` which is a section in DRAM and it will heavy bottleneck the operations. Although after PTX 9.0 there is option to automatically spill the registers in shared memory, but still it is not preferred. In the epilogue of SiLU initially I was directly loading the other tensor in registers from GMEM, but that spilled a lot of registers to avoid that you can perform some sort of tiling to save registers. You can directly search for `LDL` or `STL` instructions in SASS view which fetches data to and from local memory. 
+In the atomic spin-lock polling loop, `ptxas` automatically introduced a `yield` instruction. It deprioritizes the current warp while the warp waits for the counter to reach the required value, so the scheduler does not waste resources on it.
 
-Next have a look at the `Warp State Statistics` which tells the average staus of a warp. Since in our case 4 out of 8 warps are always sleeping therefore there is a spike in `Stall Sleeping` ignoring those instructions (in our case, not otherwise) you have to focus on `Stall Math Pipe Throttle` which means the warps are waiting for the compute instructions which is a good thing as we are overwhelming the tensor and cute cores. Rest there are `Stall Long Scorebboard` and `Stall Short Scorebboard` which means the warp is waiting for the Global memory operations (long scoreboard) and Shared memory operations (short scoreboard). To get to know more about scoreboard and dependency management between instructions you can read this page <cite here> in modal GPU gloasarry which has a great explanation of fixed time dependency management and non uniform instructions dependency management. 
+### Compute and Memory Throughput
 
-There are a lot of beautiful things visible in the SASS section where the PTXAS compiler overlaps the tensorcore instructios with register load instructions to hide the latency and a lot of overlapping going on, adding on to this, at any point of code if you introduce `__syncthreads()` or `bar.sync` or any barrier instructions this forces the compiler to complete all the previous operations before the placeing the the above instructions. So it heavily reduces the instruction overlap between the current and the next operation. In fact a single wrong barrier placement can force the compiler to spill the register because it canno overlap the instructions. 
+Inspect both compute and memory throughput. Very high memory throughput can indicate poor L2-cache reuse—which is why state-of-the-art matmul kernels use L2-cache-aware tiling—or a memory-bound operation. This kernel is compute-bound, so increased compute throughput directly improves performance.
 
-If you see very high value of `L2 Theoretical Sectors Global Excessive` in the `Details` page it means the global loads are not coalased and can be more effectively coalased to use the maximum bandwidth of the GPU. 
+### Register Pressure and Spills
 
-The above metrics should be more than enough to optimize an kernel. But still if you REALLY want to get in the overall working of the kernel, you need to go one more level deeper and use `Intra Kernel Profiling`
+Avoid register spills. Spilled registers are stored in local memory, which resides in DRAM and can severely bottleneck execution. Although PTX 9.0 provides an option to spill registers to shared memory, avoiding spills is still preferable. For example, directly loading the other tensor from global memory into registers in the SiLU epilogue caused excessive spilling; tiling the operation reduced register pressure. In the SASS view, search for `LDL` and `STL` instructions, which load from and store to local memory.
+
+### Warp State Statistics
+
+Use `Warp State Statistics` to understand the average state of each warp. In this kernel, four of eight warps are intentionally sleeping, so a spike in `Stall Sleeping` is expected. Ignore that expected behavior and focus on `Stall Math Pipe Throttle`, which means the warps are waiting on compute instructions—a positive sign here because the tensor and CuTe cores are heavily utilized. `Stall Long Scoreboard` and `Stall Short Scoreboard` indicate waits on global-memory and shared-memory operations, respectively. For more background on scoreboarding and instruction dependencies, see the Modal GPU Glossary <cite here>.
+
+### Instruction Overlap and Barriers
+
+The SASS view also shows how `ptxas` overlaps tensor-core instructions with register-load instructions to hide latency. Introducing `__syncthreads()`, `bar.sync`, or another barrier forces the compiler to complete prior work before proceeding, which can significantly reduce overlap between the current and next operations. A poorly placed barrier can even cause register spills by preventing the compiler from overlapping instructions.
+
+### Global-Memory Coalescing
+
+A high `L2 Theoretical Sectors Global Excessive` value on the `Details` page indicates that global loads are not coalesced efficiently. Improve the access pattern to use the available memory bandwidth more effectively.
+
+These metrics are usually sufficient to optimize a kernel. If you need to understand the complete execution flow, go one level deeper with intrakernel profiling.
 
 ### Intrakernel Profiling
 
-This is the most beautiful form of profiling if you are running deep async pipelins. We sample the `clock64` registers which is a per SM clock inside the GPU and write it on-the-fly to GMEM. Then you can sample at start and end of your pipelines and dump it into a perfetto trace format. Also at the very start of the kernel you have to sample the `globalTimer` register to synchronize because the `clock64` might not be synchronized within SMs. 
+Intrakernel profiling is especially useful for deep asynchronous pipelines. Sample the per-SM `clock64` register and write the values to global memory as the kernel runs. Sample at the beginning and end of each pipeline stage, then export the data to a Perfetto trace. At the start of the kernel, also sample `globalTimer` for synchronization because `clock64` is not necessarily synchronized across SMs.
 
-Next part will be on writing an actual decode kernel with this strategy for actual models and create a single user inference server.
+The next part will cover applying this strategy to an actual decode kernel for real models and building a single-user inference server.
+
+## References
+
+1. <a id="ref-modal-gpu-glossary"></a>Modal. “GPU Glossary.” *Modal*. [https://modal.com/gpu-glossary](https://modal.com/gpu-glossary)
+2. <a id="ref-yang-cute-copy"></a>Yifan Yang. “CuTe Copy.” [https://yang-yifan.github.io/blogs/cute_copy/cute_copy.html](https://yang-yifan.github.io/blogs/cute_copy/cute_copy.html)
