@@ -71,7 +71,6 @@ latest_posts:
   }
 </style>
 
-
 Hi! I'm Parth Badgujar, a recent graduate in Electronics and Communication Engineering from **Indian Institute of Technology Roorkee** (Class of 2026). My primary interests lie in **ML Systems**, **Diffusion Models**, and **Adversarial ML**.
 
 At IIT Roorkee, I was part of <a href="https://dsgiitr.in" target="_blank">Data Science Group, IITR</a> and <a href="https://infoseciitr.in" target="_blank">InfoSecIITR</a> — where I worked on ML research and competed in CTFs, focusing on **binary exploitation**. I also enjoy writing high-performance **GPU kernels** using CUDA, CuTe DSL, and Triton.
@@ -90,15 +89,6 @@ Outside of tech, I'm deeply fascinated by **space and aviation** — always keep
     <div style="margin-left: 1rem;">
       <div style="font-size: 1.1rem; font-weight: 700; margin: 0; line-height: 1.3;">Meesho</div>
       <div style="font-style: italic; opacity: 0.7; margin-top: 2px;">Data Scientist - 1</div>
-    </div>
-  </div>
-
-  <div style="display: flex; flex-direction: row; align-items: flex-start; padding: 1rem 0 1rem 1.5rem; position: relative;">
-    <div style="position: absolute; left: -8px; top: 1.25rem; width: 13px; height: 13px; border-radius: 50%; background: var(--global-theme-color); border: 2px solid var(--global-bg-color);"></div>
-    <div style="min-width: 160px; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--global-theme-color); padding-top: 2px;">Feb 2026 – May 2026</div>
-    <div style="margin-left: 1rem;">
-      <div style="font-size: 1.1rem; font-weight: 700; margin: 0; line-height: 1.3;">CANDLE Research Lab</div>
-      <div style="font-style: italic; opacity: 0.7; margin-top: 2px;">Department of ECE, IIT Roorkee</div>
     </div>
   </div>
 

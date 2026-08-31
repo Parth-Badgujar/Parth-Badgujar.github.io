@@ -1,6 +1,6 @@
 ---
 layout: post
-title: Beating torch.compile with Megakernels in CuTe DSL
+title: Beating torch.compile with Megakernels in CuTe DSL [Part 1]
 date: 2026-07-05 08:00:00
 description: A deep dive into custom GPU kernels and how they can outperform torch.compile.
 tags: [gpu, cuda, triton, machine-learning, pytorch]
@@ -11,11 +11,11 @@ toc:
   sidebar: left
 ---
 
-*Prior NVIDIA GPU related knowledge is needed before going through this blog. If you're new to the topic, [Modal GPU Glossary](https://modal.com/gpu-glossary) is a great place to start!*
+_Prior NVIDIA GPU related knowledge is needed before going through this blog. If you're new to the topic, [Modal GPU Glossary](https://modal.com/gpu-glossary) is a great place to start!_
 
 ## Intro to Megakernels and Why Megakernels ?
 
-Normally when you run any PyTorch model without any optimizations it runs in `eager` mode, which means each operation is dispatched one by one to the GPU. Adding optimization like `torch.compile` performs operator fusion to reduce the number of kernel launches and improves data-reuse in operations but still you have multiple kernel launches in single forward pass. In megakernels the goal is fuse all operations into a `single` kernel launch.
+Normally when you run any PyTorch model without any optimizations it runs in `eager` mode, which means each operation is dispatched one by one to GPU. Adding optimization like `torch.compile` performs operator fusion to reduce the number of kernel launches and improves data-reuse in operations but still you have multiple kernel launches in single forward pass. In megakernels the goal is fuse all operations into a `single` kernel launch.
 
 In the current GPU execution model, on actual hardware you have a limited set of `SMs (Streaming Multiprocessors)` on which blocks of kernels are being scheduled based on the hardware resources used by each block. We'll first device some strategies to design the megakernel.
 
@@ -34,9 +34,9 @@ When a kernel has higher number of blocks than SMs can fit, the scheduler launch
 
 Assume you have two such kernels launched in a sequential manner on the same `cuda stream`, both of them will have extra waves. Through some black magic, if we are able to combine the execution of both kernels together, we can save a complete wave in theory and gain some free lunch.
 
-### Load/Store/Compute Overlap using TMA 
+### Load/Store/Compute Overlap using TMA
 
-After scheduling the waves properly, to squeeze out maximum performance, we can use `TMA (Tensor Memory Accelerator)` to `asynchronously load` the data required in the next wave while we are performing the compute of the current wave. Similarly, we can use TMA to perform `asynchronous stores` so that the next wave can run while the current store operation completes. This hides the complete latency of load/store behind compute similar to SoTA `matmul` kernels.
+After scheduling properly, to squeeze out maximum performance, we can use `TMA (Tensor Memory Accelerator)` to `asynchronously load` the data required in next wave while we are performing compute of the current wave. Similarly, we can use TMA to perform `asynchronous stores` so that next wave can run while the current store operation completes. This hides complete latency of load/store behind compute similar to SoTA `matmul` kernels.
 
 <div class="row mt-3 mb-4">
   <div class="col-sm mt-3 mt-md-0">
@@ -47,9 +47,9 @@ After scheduling the waves properly, to squeeze out maximum performance, we can 
   </div>
 </div>
 
-### TMA Compute Overlap (Finegrained) 
+### TMA Compute Overlap (Finegrained)
 
-The above cases assumed you don't have data dependency between kernels, but otherwise you cannot directly schedule them in parallel, `Kernel B` will require the output of `Kernel A` to be ready before it starts loading. But we dealing with machine learning models which have `weights + activations`, we can still prefetch the weights while the activations are not ready and overlap the load with compute.
+The above cases assumed you don't have data dependency between kernels, but otherwise you cannot directly schedule them in parallel, `Kernel B` will require output of `Kernel A` to be ready before it starts loading. But we dealing with machine learning models which have `weights + activations`, we can still prefetch weights while the activations are not ready and overlap load with compute.
 
 <div class="row mt-3 mb-4">
   <div class="col-sm mt-3 mt-md-0">
@@ -61,30 +61,31 @@ The above cases assumed you don't have data dependency between kernels, but othe
 </div>
 
 ### Launch Overhead
+
 A kernel launch is not simple as it seems. GPU has to setup context for current kernel, clear context of previous kernel, flush the L1/L2 caches and a lot more stuff. Although this takes a couple of microseconds but while doing 100s of passes we can save a couple of milliseconds of total execution time.
 
 By combining all of these strategies into a single `megakernel`, we bypass the standard GPU scheduler and minimize overhead. However, this means we must carefully build our own custom block scheduler directly into the kernel, manually managing data dependencies and synchronization across asynchronous execution blocks.
 
-
 ## Implementation Plan
 
 ### GPU Architecture
-I have access to an `RTX 5070 Ti` (`sm120`), so I decided to optimize for the `sm120` family of GPUs (RTX Pro 6000, RTX 50 Series, and DGX Spark). `sm120`, the so-called "consumer Blackwell," is an interesting architecture in the sense that it borrows hardware features from the `Hopper` family like `TMA`, and also has hardware support for block-scaled matrix multiplication (`NVFP4`, `MXFP4`, etc.), but uses warp-synchronous tensor cores unlike actual Blackwell (`sm100` family) which has async tensor cores and `TMEM (Tensor Memory)`. Apart from the above, there are a lot more differences we'll encounter.
+
+I have access to `RTX 5070 Ti` (`sm120`), so I decided to optimize for `sm120` family of GPUs (RTX Pro 6000, RTX 50 Series, and DGX Spark). `sm120`, the so-called "consumer blackwell". It is an interesting architecture in the sense that it borrows hardware features from `Hopper` family like `TMA`, and also has hardware support for block-scaled matrix multiplication (`NVFP4`, `MXFP4`, etc.), but uses warp-synchronous tensor cores unlike actual Blackwell (`sm100` family) which has async tensor cores and `TMEM (Tensor Memory)`. Apart from the above, there are a lot more differences we'll encounter.
 
 ### Model Architecture
 
-* Currently focusing on a simple LLaMA-like (RMSNorm + SwiGLU) transformer architecture. As of now, I haven't included RoPE and the final projection layer from the embedding space to probabilities, currently focusing on the core components of the transformer, will add the rest in future parts. 
-* This kernel isn't for direct decode style inference as we have to perform `split-K GEMV` and `split-K attention (flash decoding)` for efficient KV-Cache based decoding. Here I am doing a simple transformer forward pass with KV calculation (without any past KV cache) in compute-bound regime, to showcase the performance benefits. Though the techniques can still be applied to single batch decode kernels.
+- Currently focusing on a simple LLaMA-like (RMSNorm + SwiGLU) transformer architecture. As of now, I haven't included RoPE and the final projection layer from embedding space to probabilities, currently focusing on the core components of transformer, will add the rest in future parts.
+- This kernel isn't for direct decode style inference as we have to perform `split-K GEMV` and `split-K attention (flash decoding)` for efficient KV-Cache based decoding. Here I am doing a simple transformer forward pass with KV calculation (without any past KV cache) in compute-bound regime, to showcase the performance benefits. Though these techniques can still be applied to single batch decode kernels.
 
 ### Why CuTe DSL?
 
-Majority of DSLs operate on `tile` based abstraction where we are only dealing with tile or vector like data. To design a complex kernel with finegrained hardware management `CuTe DSL` is the way to go, which gives Python flexiblity + CUDA C++'s low level control and directly compiles to `PTX`. I will cover a lot about `CuTe DSL` and kernel profiling in next parts.
+Majority of DSLs operate on `tile` based abstraction where we are only dealing with tile or vector like data. To design a complex kernel with finegrained hardware management `CuTe DSL` is the way to go, which gives Python flexiblity + CUDA C++'s low level control and directly compiles to `PTX`.
 
-## Megakernel Implementation  
+## Megakernel Implementation
 
 ### Cooperative Kernel
 
-We launch the megakernel with `gridSize == num SMs`, allocating one block per SM. Each block decodes instructions from global memory, where each instruction represents a unit of `work` containing an operator name (e.g. rmsnorm, matmul, attention) along with arguments like `blockIdx.x`, `blockIdx.y`, and `blockIdx.z` as if the operators were launched as separate kernels. We pre-schedule all instructions in order and assign operator blocks to actual kernel blocks. At runtime, each block reads its assigned instruction and calls the corresponding operator accordingly.
+We launch the megakernel with `gridSize == num SMs`, allocating one block per SM. Each block acts like a CPU and decodes our custom instructions from global memory, where an instruction represents a unit of `work` containing an operator name (e.g. rmsnorm, matmul, attention) along with arguments and other metadata. We pre-schedule all instructions in order and assign the operator block to actual kernel block. At runtime, each block reads its assigned instruction and runs the corresponding operator accordingly.
 
 ```python
 @cute.kernel
@@ -99,11 +100,11 @@ def kernel(max_works, mSchedule):
         expected_cnt = mSchedule[block_id, work_idx, 5]
         current_idx  = mSchedule[block_id, work_idx, 6]
         next_idx     = mSchedule[block_id, work_idx, 7]
-  
+
         if op_kind == int(Op.RMS):
             ...
         elif op_kind == int(Op.QKV):
-            ... 
+            ...
         elif op_kind == int(Op.ATTN):
             ...
         elif op_kind == int(Op.OUT):
@@ -115,10 +116,32 @@ def kernel(max_works, mSchedule):
         elif op_kind == int(Op.DOWN):
             ...
 ```
+
+### Warpgroup Scheduling and Pipelineing
+
+Each SM can run a maximum of 32 warps (1024 threads), but it can only schedule `4 warps (single warpgroup)` at a time to the actual hardware. Taking that into consideration, we launch 2 warpgroups (= 8 warps) so that while one warpgroup (`wg-1`) is doing its compute, the other warpgroup (`wg-2`) can asynchronously load the data and wait for `wg-1`. As soon as `wg-1` finishes, `wg-2` starts its compute while `wg-1` begins loading data for the next operation similar to ping-pong `matmul` kernels.
+
+```python
+# change the above code to this for duoble warpgroup - ping pong
+@cute.kernel
+def kernel(max_works, mSchedule):
+    block_idx = cute.arch.block_idx()[0]
+    warp_id   = cute.arch.warp_idx()
+    group_id  = warp_id // 4
+
+    for local_work_idx in range(max_works // 2):
+        work_idx = local_work_idx * 2 + group_id
+        ...
+```
+
+The async load/store handoff logic is written inside each operator. The entire architecture uses **Ampere-style two-stage pipelining with TMA**, two warpgroups operate in ping-pong fashion where **only one** warpgroup is actively computing while the other asynchronously loads data for the next operation. No warp specialization is used, both warpgroups are identical and simply alternate stages with proper barrier handoff and async stores.
+
+I initially considered warp specialization, because I overflowed register quite frequently in the inital runs and dedicating warps to producer/consumer roles would likely push us even more than that. That said, the kernel ended up using only 233 registers per thread, I'll revisit warp specialization in the future.
+
 ### Dependecy Management and Scheduling
 
-The scheduling is done in a simple round robin way across the SMs. 
-For eg. we have 8 RMS Norm blocks --> 12 Matmul block --> 8 Attention blocks to be scheduled on 5 SMs we would create the `mSchedule` so that it follows the below diagram. 
+The scheduling is done in a simple round robin way across the SMs.
+For eg. we have 8 RMS Norm blocks --> 12 Matmul block --> 8 Attention blocks to be scheduled on 5 SMs we would create the `mSchedule` so that it follows the below diagram.
 
 <div class="row mt-3 mb-4">
   <div class="col-sm mt-3 mt-md-0">
@@ -129,9 +152,9 @@ For eg. we have 8 RMS Norm blocks --> 12 Matmul block --> 8 Attention blocks to 
   </div>
 </div>
 
-This eliminates `wave quantization` bubbles and the double warpgroup ping-pong eliminates the compute bubbles and hides maximum load/store latency. But we cannot directly schedule the blocks we have to make sure that the previous output is ready. 
+This eliminates `wave quantization` bubbles and the double warpgroup ping-pong eliminates load/store bubbles. But we cannot directly schedule blocks we have to make sure that the previous output is ready.
 
-We can manage dependencies using an atomic counter based `spin-lock`. For each block, we first identify all its parent dependencies. When a parent block finishes its computation, it increments the atomic counter at its `next_idx` by 1. The current block polls the counter at `current_idx` and as soon as it reaches the predetermined value `expected_cnt`, it begins execution. At the end, each block increments the counter at its own `next_idx` to unblock downstream blocks.
+The inter block dependencies are managed using an atomic `spin-lock`. For each block, we identify all its parent dependencies. When a parent block finishes its computation, it increments an atomic counter at its `next_idx` by 1. The current block polls the counter at `current_idx` and as soon as it reaches the predetermined value `expected_cnt`, it begins execution.
 
 <div class="row mt-3 mb-4 justify-content-center">
   <div class="col-sm-8 mt-3 mt-md-0">
@@ -142,36 +165,18 @@ We can manage dependencies using an atomic counter based `spin-lock`. For each b
   </div>
 </div>
 
-### Warpgroup Scheduling and Pipelineing
-Each SM can run a maximum of 32 warps (1024 threads), but it can only schedule `4 warps (single warpgroup)` at a time to the actual hardware. Taking that into consideration, we launch 2 warpgroups (= 8 warps) so that while one warpgroup (`wg-1`) is doing its compute, the other warpgroup (`wg-2`) can asynchronously load the data and wait for `wg-1`. As soon as `wg-1` finishes, `wg-2` starts its compute while `wg-1` begins loading data for the next operation similar to ping-pong `matmul` kernels. 
-
-
-```python
-@cute.kernel
-def kernel(max_works, mSchedule):
-    block_idx = cute.arch.block_idx()[0]
-    warp_id    = cute.arch.warp_idx()
-    group_id   = warp_id // 4
-
-    for local_work_idx in range(max_works // 2):
-        work_idx = local_work_idx * 2 + group_id
-        ...   
-```
-
-The async load/store handoff logic is written inside each operator. The entire architecture uses **Ampere-style two-stage pipelining with TMA**, two warpgroups operate in ping-pong fashion where **only one** warpgroup is actively computing while the other asynchronously loads data for the next operation. No warp specialization is used, both warpgroups are identical and simply alternate stages with proper barrier handoff and async stores.
-
-I initially considered warp specialization, but chose against it—we are already at the brink of register overflow, and dedicating warps to producer/consumer roles would likely push us over. That said, the kernel ended up using only 233 registers per thread, I'll revisit warp specialization in the future.
-
 ### Shared Memory Layout
 
 The `sm120` architecture provides `99 KiB` of max usable shared memory per SM. To ensure smooth, non-blocking handoff between operators, the shared memory is statically partitioned into three regions:
 
-| Region | Size | Purpose |
-|--------|------|---------|
-| `stage0` buffer | 32 KiB | Active input tile for the computing warpgroup |
-| `stage1` buffer | 32 KiB | Prefetch buffer for the next warpgroup's input |
-| `output` buffer | 34 KiB | Stores the result of the current operation |
-| `mbarriers` + misc | 1 KiB | Barrier objects and miscellaneous metadata |
+| Region             | Size   | Purpose                                       |
+| ------------------ | ------ | --------------------------------------------- |
+| `stage0` buffer    | 32 KiB | Input for inter and intra operation pipelines |
+| `stage1` buffer    | 32 KiB | Input for inter and intra operation pipelines |
+| `output` buffer    | 34 KiB | Stores the result of the current operation    |
+| `mbarriers` + misc | 1 KiB  | Barrier objects and miscellaneous metadata    |
+
+I have adopted for static shared memory layout you can refer to megakernel by Hazy Research where they have implemented a page based shared memory allocator where each page is 16 KiB and allocated during runtime. But in my case I thought static might be simple with two stages instead of adding extra allocator. Initially I had tried with three stages but that limits the size of `matmul` stages and reduced performance for large matmuls so I reverted back to two stages.
 
 ```python
 @cute.jit
@@ -203,11 +208,11 @@ def kernel(...):
     storage = self._get_shared_storage()
 ```
 
-While one warpgroup computes using `stage0`, the other prefetches into `stage1`. On the next iteration they swap, this is the classic ping-pong pattern extended uniformly across all operators. Each operator's input tiles must fit within the 32 KiB upper limit of a single stage buffer.
+While one warpgroup computes using `stage0`, the other prefetches into `stage1`. On the next iteration they swap, this is the classic ping-pong pattern extended uniformly across all operators. Each operator's input tiles must fit within the 32 KiB upper limit of a single stage buffer. But operations like matmul use both stages even though a single warpgroup is running that operation and near the end of operation it makes sure that the other warpgroup starts with the stage which is freed so we pipeline both at inter op level and intra op level.
 
 > Note that `sm120` does **not** support TMA Swizzled Stores unlike the `sm100` architecture, so we add **16 bytes of padding per row** to the output tiles stored in shared memory to prevent bank conflicts during the store phase.
 
-* **Matmul:** Each stage holds both the A and B tiles in `fp16`. With $\mathrm{blockM} = 64$, $\mathrm{blockN} = 128$, and $\mathrm{blockK} = 64$:
+- **Matmul:** Each stage holds both the A and B tiles in `fp16`. With $\mathrm{blockM} = 64$, $\mathrm{blockN} = 128$, and $\mathrm{blockK} = 64$:
 
   $$\mathrm{A\ tile} = \mathrm{blockM} \times \mathrm{blockK} \times 2\,\mathrm{B} = 64 \times 64 \times 2 = 8 \;\mathrm{KiB}$$
 
@@ -228,8 +233,7 @@ While one warpgroup computes using `stage0`, the other prefetches into `stage1`.
     </div>
   </div>
 
-
-* **Attention:** I have used Flash Attention v2 like approach, where each stage holds the Q, K, and V tiles. With $\mathrm{blockQ} = 64$, $d_{\mathrm{head}} = 128$, and $\mathrm{blockKV} = 64$ in `fp16`, each tile occupies:
+- **Attention:** I have used Flash Attention v2 like approach, where each stage holds the Q, K, and V tiles. With $\mathrm{blockQ} = 64$, $d_{\mathrm{head}} = 128$, and $\mathrm{blockKV} = 64$ in `fp16`, each tile occupies:
 
   $$\mathrm{Q\ tile} = \mathrm{blockQ} \times d_{\mathrm{head}} \times 2\,\mathrm{B} = 64 \times 128 \times 2 = 16 \;\mathrm{KiB}$$
 
@@ -256,7 +260,7 @@ While one warpgroup computes using `stage0`, the other prefetches into `stage1`.
     </div>
   </div>
 
-* **RMSNorm:** The row-parallel work distribution is designed to maximize strong scaling across SMs. For N rows, each block is assigned `prev_power_of_two(N / num_sms)` rows to ensure even work distribution. Within each block, a `warps_per_row` parameter controls how many of the 4 available warps cooperate on normalizing a single row, for instance, `warps_per_row = 2` means two rows are in compute simultaneously, each processed by 2 warps. These rows are again two-stage pipelined, one set of rows is being normalized while the next set is being loaded asynchronously 
+- **RMSNorm:** The row-parallel work distribution is designed to maximize strong scaling across SMs. For N rows, each block is assigned `prev_power_of_two(N / num_sms)` rows to ensure even work distribution. Within each block, a `warps_per_row` parameter controls how many of the 4 available warps cooperate on normalizing a single row, for instance, `warps_per_row = 2` means two rows are in compute simultaneously, each processed by 2 warps. These rows are again two-stage pipelined, one set of rows is being normalized while the next set is being loaded asynchronously
     <div class="row mt-3 mb-4">
       <div class="col-sm mt-3 mt-md-0">
         <figure>
@@ -266,23 +270,21 @@ While one warpgroup computes using `stage0`, the other prefetches into `stage1`.
       </div>
     </div>
 
-Although I have adopted for static shared memory layout you can refer to megakernel by Hazy Research where they have implemented a page based shared memory allocator where each page is 16 KiB and allocated during runtime. But in my case I thought static might be simple with two stages instead of adding extra allocator. Initially I had tried with three stages but that limits the size of `matmul` stages and reduced performance for large matmuls so I reverted back to two stages.
-
 ### Synchronization
 
 To manage such pipeline there are three barriers namely `input_barrier`, `compute_barrier` and `output_barrier` per warpgroup and an additional set of `load_barrier` one for each stage, in total we have 2x3 + 1x2 = 8 barriers, all of them are `mbarrier` where threads can arrive, wait for other threads or wait for memory transactions.
 
-As there are barriers for each warpgroup I have named them `input_bar_me` (current warpgroup) and `input_bar_ot` (other warpgroup), same scheme for `output_barrier` and `compute_barrier`. 
+As there are barriers for each warpgroup I have named them `input_bar_me` (current warpgroup) and `input_bar_ot` (other warpgroup), same scheme for `output_barrier` and `compute_barrier`.
 
-* **input_barrier:** Sits at the very start of the operator. We wait on the barrier (`input_bar_me`) until the other warpgroup arrives on its `input_bar_ot`. It signals the warpgroup that the input stage is released and now its ready to start loading data. After the barrier there is a `load_stage` variable in shared memory which is the stage to be used in the current iteration. It is updated by the other warpgroup before arrival on `input_bar_ot`.
+- **input_barrier:** Sits at the very start of the operator. We wait on the barrier (`input_bar_me`) until the other warpgroup arrives on its `input_bar_ot`. It signals the warpgroup that the input stage is released and now its ready to start loading data. After the barrier there is a `load_stage` variable in shared memory which is the stage to be used in the current iteration. It is updated by the other warpgroup before arrival on `input_bar_ot`.
 
-* **compute_barrier:** `input_barrier` only guarantees that one of the stage buffers is released but not both. Therefore another barrier is required to signal that all stages are now released and we can start computing on the released stage. This barrier is placed just before loading the next pipeline stage.
+- **compute_barrier:** `input_barrier` only guarantees that one of the stage buffers is released but not both. Therefore another barrier is required to signal that all stages are now released and we can start computing on the released stage. This barrier is placed just before loading the next pipeline stage.
 
-* **output_barrier:** `output_barrier` guarentees that the output buffer is released so the `wait(output_bar_me)` is placed jut before writing anything to the output buffer and `arrive(output_bar_ot)` is placed after the output is fully stored from SMEM to GMEM.
+- **output_barrier:** `output_barrier` guarentees that the output buffer is released so the `wait(output_bar_me)` is placed jut before writing anything to the output buffer and `arrive(output_bar_ot)` is placed after the output is fully stored from SMEM to GMEM.
 
 #### Atomic Spin Lock
 
-Just after the `input_barrier` a single thread spins on the `current_idx` of the atomic array untill its value reaches `expected_cnt`. 
+Just after the `input_barrier` a single thread spins on the `current_idx` of the atomic array untill its value reaches `expected_cnt`.
 
 ```python
 @dataclass
@@ -302,13 +304,14 @@ These are the main concepts used in the kernel, after this the remaining part is
 
 ## Implementation in CuTe DSL
 
-In CuTe DSL you have to wrap the python functions in `@cute.jit` and `@cute.kernel`. `@cute.jit` has the code which is going to get JIT compiled, it can be either of CPU/GPU function. `@cute.kernel` is the actual entry point of the kernel which is launched with `.launch(grid=(num_sms,), block=(256,))` method of the wrapper. 
+In CuTe DSL you have to wrap the python functions in `@cute.jit` and `@cute.kernel`. `@cute.jit` has the code which is going to get JIT compiled, it can be either of CPU/GPU function. `@cute.kernel` is the actual entry point of the kernel which is launched with `.launch(grid=(num_sms,), block=(256,))` method of the wrapper.
 
 ### Load / Store Ops
 
-#### LDGSTS and Register Copies 
+#### LDGSTS and Register Copies
 
-There are multiple ways you can load / store date from registers to Global and Shared memory. https://yang-yifan.github.io/blogs/cute_copy/cute_copy.html has a great blog with all the different ways to copy the data. To use the `LDGSTS` async copy (introduced in Ampere for async GMEM <-> SMEM copies) you have to use `cute.make_tiled_copy` with `cpasync.CopyG2SOp`, below is the implementation in the attention operator. 
+There are multiple ways you can load / store date from registers to Global and Shared memory. https://yang-yifan.github.io/blogs/cute_copy/cute_copy.html has a great blog with different ways to copy the data. To use the `LDGSTS` async copy (introduced in Ampere for async GMEM <-> SMEM copies) you have to use `cute.make_tiled_copy` with `cpasync.CopyG2SOp`, below is the implementation in the attention operator.
+
 ```python
 def get_tiled_copy_cpasync(self) -> cute.TiledCopy:
     atom_async = cute.make_copy_atom(
@@ -328,19 +331,12 @@ There is also `cute.autovec_copy` where you have to give the thread partitions o
 
 #### TMA Copies
 
-I have used TMA for all tensor load / store operations except for the weights of RMSNorm and Attention. Given `N` transformer layers the weights of each operator are stacked contigously, so a weight matrix of shape `(A, B)` is now shaped `(N, A, B)`. This allows use to use a single TMA descriptor for the weights of multiple layers, by adding an extra dim in TMA. 
+I have used TMA for all tensor load / store operations except for weights of RMSNorm (direct register copy) and Attention (LDGSTS). Given `N` transformer layers the make the weights of each operator stacked contigously in memory, so a weight matrix of shape `(A, B)` is now shaped `(N, A, B)`. This allows use to use a single TMA descriptor for the weights of multiple layers, by adding an extra dim in TMA.
 
-Then create shared memory layouts of the tensors *(they should have exact dimentions and strides that of a single tile)*. For padded stores using `TMA` we simply create a shared memory layout which has a larger shape than the global `gC_tile`, then TMA hardware automatically clips the output tile and doesn't write those extra bytes. The normal `sC_layout` does not work with TMA if you want to clip the dims. 
+Then create shared memory layouts of the tensors _(they should have exact dimentions and strides that of a single tile)_. For padded stores using `TMA` we simply create a shared memory layout which has a larger shape than the global `gC_tile`, then TMA hardware automatically clips the output tile and doesn't write those extra bytes. The normal `sC_layout` does not work with TMA if you want to clip the dims.
 
 ```python
 ## TMA Layouts given while creating TMA atoms
-
-# All the matmul output tensors have this layout where the last dim is split in bN blocks 
-# this allows TMA to clip the padding bytes, therefore we have to add extra dimention in the sC_tma layout
-# cute.make_ordered_layout(
-#     shape = (self.num_tokens, self.ff_dim // self.bN, self.bN),
-#     order = (2, 1, 0),
-# )
 
 sA_layout = cute.make_composed_layout(
     cute.make_swizzle(int(math.log2(bK)) - 3, 4, 3), 0,
@@ -363,19 +359,25 @@ sC_layout = cute.make_layout(
     stride = (bN + pad, 1) #pad = 8 elements = 16 bytes
 )
 
-#Same as the above sC_layout but with contiguous strides
+# Same as the above sC_layout but with contiguous strides
+# Matmul output tensors have this layout where the last dim is split in bN blocks
+# this allows TMA to clip the padding bytes, therefore we have to add extra dimention in the sC_tma layout
+# cute.make_ordered_layout(
+#     shape = (self.num_tokens, self.ff_dim // self.bN, self.bN),
+#     order = (2, 1, 0),
+# )
 sC_tma_layout = cute.make_ordered_layout(
     shape = (bM, 1, bN + output_pad), order = (2, 1, 0),
 )
 ```
 
-All the TMA atoms are created before the kernel inside the `__call__` function for the input, weights and output activations involved in eacch of the operation. The atoms already have the TMA descriptors embedded in them we don't have to separately create TMA descriptors. For operations where the activations are pointwise added in the epilogue we can use the inplace reductio feature of TMA. 
+TMA atoms are created before the kernel inside the `__call__` function for the input, weights and output activations involved in eacch of the operation. The atoms already have the TMA descriptors embedded in them we don't have to separately create TMA descriptors. For matmul operations where the activations have pointwise addition in the epilogue we can use the inplace reduction feature while performing TMA Stores.
 
 ```python
 load_op  = cpasync.CopyBulkTensorTileG2SOp()
 store_op = cpasync.CopyBulkTensorTileS2GOp()
 if cutlass.const_expr(self.use_tma_reduce):
-    store_op_red = cpasync.CopyReduceBulkTensorTileS2GOp(cute.ReductionKind.ADD)
+    store_op_red = cpasync.CopyReduceBulkTensorTileS2GOp(cute.ReductionKind.ADD) #cp.async.reduce.bulk.tensor.3d...
 else:
     store_op_red = store_op
 
@@ -385,7 +387,8 @@ tma_QKV_wt,  g_QKV_wt  = cpasync.make_tiled_tma_atom(load_op,  mQKV_proj,  sB_la
 tma_QKV_act, g_QKV_act = cpasync.make_tiled_tma_atom(store_op, mQKV_act,   sC_tma_layout, (bM, 1, bN + output_pad))
 ... #similarly for all operation
 ```
-> We cannot pass the raw `mWS1_embed` tensor in the runtime code of the TMA, we have to pass the tensor returned in the above code because it is a special `ArithmeticTuple` tensor which has vectorized strides so that we are able to slice into the tile of the global tensor. During runtime inside the `matmul()` function they below code snippet creates the per thread, partitions of the TMA operation. 
+
+> We cannot pass the raw `mWS1_embed` tensor in the runtime code of the TMA, we have to pass the tensor returned in the above code because it is a special `ArithmeticTuple` tensor which has vectorized strides so that we are able to slice into the tile of the global tensor. During runtime inside the `matmul()` function they below code snippet creates the per thread, partitions of the TMA operation.
 
 ```python
 ## in matmul.py during runtime
@@ -424,7 +427,8 @@ tAsA, tAgA = cpasync.tma_partition(tma_A, 0, cute.make_layout(1), sA_g, gA_g) # 
 tBsB, tBgB = cpasync.tma_partition(tma_B, 0, cute.make_layout(1), sB_g, gB_g) # per thread view of sB and gB
 ```
 
-We have to group the tile shape mode together for the TMA to interpret the exact tile and rest modes can be used as stages for the async copies. TMA copies are called using `cp.async.bulk.tensor.2d. ...` instruction which is to be called by a single thread asynchronously and pass the tile coordinates, descriptor pointer and the destination address to the instruction. The same thing is done by `cute.copy(...)` function below. `cute.copy(...)` with TMA atom internally calls `cute.elect_one()` which elects a single thread from a warp to run that instruction therefore we have to wrap it in `if warp_id == 0:`, if you pass `cute.copy(...)` in `elect_one()` then it will stall the execution because of calling nested `elect_one()`, this is a common pitfall to avoid. 
+We have to group the tile shape mode together for TMA to interpret the exact tile and rest modes can be used as stages for async copies. TMA copies are called using `cp.async.bulk.tensor.2d. ...` instruction which is to be called by a single thread asynchronously and pass tile coordinates, descriptor pointer and destination address to the instruction. Same thing is done by `cute.copy(...)` function below. `cute.copy(...)` with TMA atom internally calls `cute.elect_one()` which elects a single thread from a warp to run that instruction therefore we have to wrap it in `if warp_id == 0:`, if you pass `cute.copy(...)` in `elect_one()` then it will stall execution because of calling nested `elect_one()`, this is a common pitfall to avoid.
+
 ```python
 if warp_id == 0:
     with cute.arch.elect_one():
@@ -432,7 +436,7 @@ if warp_id == 0:
     cute.copy(tma_A, tAgA[None, tile_idx], tAsA[None, stage_idx], tma_bar_ptr = load_bar + stage_idx)
 ```
 
-For TMA stores we have to perform the same operations `groupmodes -> partition -> copy`, but TMA stores don't support mbarrier completition mechanism, therefore we also have to call the `bulk_group` API to commit the store and track it. Additionally I have called `fence_proxy_async_global()` to ensure that the stores are visible to other SMs, without this you will constantly have race conditions within SMs, it took me and claude a while to figure this out.
+For TMA stores we have to perform the same operations `groupmodes -> partition -> copy`, but TMA stores don't support mbarrier completition mechanism, therefore we also have to call `bulk_group` API to commit the store and track it. Additionally I have called `fence_proxy_async_global()` to ensure that stores are visible to other SMs, without this you will constantly have race conditions within SMs, it took me and claude a while to figure this out.
 
 ```python
 if warpgroup.warp_id == 0:
@@ -446,9 +450,9 @@ if warpgroup.warp_id == 0:
     fence_proxy_async_global()
 ```
 
-#### LdMatrix / StMatrix Instructions 
+#### LdMatrix / StMatrix Instructions
 
-These copies are similar to most of the copy atoms but you have to be carefull when to use the transpose and when not to use transpose and the datatype. CuTe DSl actually simplifies the usage of this API by handling the address generation and applying the swizzling automatically, or else it was a huge pain to use the `ldmatrix` and `stmatrix` instructions with inline ptx. 
+These copies are similar to most of the copy atoms but you have to be carefull when to use transpose, when not to use transpose and datatype. CuTe DSL actually simplifies the usage of this API by handling address generation and applying swizzling automatically, or else it was a huge pain to use `ldmatrix` and `stmatrix` instructions with inline ptx.
 
 ```python
 # group_tidx is thread index within a warp group
@@ -461,7 +465,7 @@ tiled_mma = cute.make_tiled_mma(
 thr_mma = tiled_mma.get_slice(warpgroup.group_tidx)
 
 # this seemse confusing but it creates registers tensors based on per-thread partitioned shared memory
-tCrA = thr_mma.make_fragment_A(thr_mma.partition_A(sA[None, None, 0])) 
+tCrA = thr_mma.make_fragment_A(thr_mma.partition_A(sA[None, None, 0]))
 tCrB = thr_mma.make_fragment_B(thr_mma.partition_B(sB[None, None, 0]))
 
 ldmatrix = cute.make_copy_atom(warp.LdMatrix8x8x16bOp(transpose=False, num_matrices=4), BFloat16)
@@ -480,6 +484,7 @@ cute.copy(thr_copy_B, tCsB, tCrB_cpy)
 
 cute.gemm(tiled_mma, tCrC, tCrA, tCrB, tCrC)
 ```
+
 <div class="row mt-3 mb-4">
     <div class="col-sm mt-3 mt-md-0">
       <figure>
@@ -489,8 +494,7 @@ cute.gemm(tiled_mma, tCrC, tCrA, tCrB, tCrC)
     </div>
   </div>
 
-
-Similarly for storing we have to use the `stmatrix` atom and `cute.make_tiled_copy_C` and rest is similar.
+Similarly for storing we have to use `stmatrix` atom and `cute.make_tiled_copy_C` and rest is similar.
 
 ```python
 thr_mma = tiled_mma.get_slice(warpgroup.group_tidx)
@@ -500,9 +504,9 @@ store_atom = cute.make_copy_atom(
 thr_copy_C = cute.make_tiled_copy_C(stmatrix, tiled_mma).get_slice(warpgroup.group_tidx)
 ```
 
-### TensorSSA 
+### TensorSSA
 
-Ideally you cannot do any vectorized operations on any of the `cute.Tensor`, to ease out vector operations you can call `.load()` on `cute.Tensors` which returns a `TensorSSA` object. `TensorSSA` is a vectorized IR of the underlying tensor, you can perform broadcasting, reductions (both local and warp) and pointwise operations on that object with self and other `TensorSSA` objects. Finally you can call `.store(result)` on the `cute.Tensor` where you want to store the result, the compiler will automatically generate code for it. This is the attention row-reduction in `TensorSSA`: 
+Ideally you cannot do any vectorized operations on any of `cute.Tensor`, to ease out vector operations you can call `.load()` on `cute.Tensors` which returns a `TensorSSA` object. `TensorSSA` is a vectorized IR of the underlying tensor, you can perform broadcasting, reductions (both local and warp) and pointwise operations on that object with self and other `TensorSSA` objects. Finally you can call `.store(result)` on the `cute.Tensor` where you want to store the result, the compiler will automatically generate code for it. This is the attention row-reduction in `TensorSSA`:
 
 ```python
 scores_mn = Attention._reshape_acc_to_mn(acc_S)
@@ -527,9 +531,10 @@ for r in cutlass.range_constexpr(num_rows_per_thr):
     scores_mn[r, None].store(probs)
 ```
 
-### Matmul Instructions 
+### Matmul Instructions
 
-Currently this is a simple explanation of the warp sync tensor cores APIs, will cover `tcgen05` sometime in future. The pattern is similar first create an MMAOp then create a `TiledMMA` using `cute.make_tiled_mma(...)`. `TiledMMA` can be directly called with `cute.gemm` with the arguments as the per thread register partitions. It is also used to create `TiledCopy` for LdMatrix / StMatrix operations. 
+Currently this is a simple explanation of warp sync tensor cores APIs, will cover `tcgen05` sometime in future. The pattern is similar first create an MMAOp then create a `TiledMMA` using `cute.make_tiled_mma(...)`. `TiledMMA` can be directly called with `cute.gemm` with arguments as the per thread register partitions. It is also used to create `TiledCopy` for LdMatrix / StMatrix operations.
+
 ```python
 
 from cutlass import BFloat16, Float32
@@ -541,67 +546,47 @@ cute.make_tiled_mma(
 )
 ```
 
-`(warpM, warpN, 1)` are the warp tiling dimentions, there will be `warmM` warps the M dimention and `warpN` warps in the N dimention. Then there is `permutation_mnk` it is the complete tile size on which this MMA Op will work. To make things clear assume `permutation_mnk` is (128, 128, 64) so all the involved warps will work on this massive tile, and a warp tiling of (2, 2, 1) means each warp will work on 64 cols and 64 rows. BUT this is just tip of the iceberg, you can do far more complex things with `permutation_mnk` it accepts cute.layout in each dimention where you can specify the arrange ment of how those 64 rows and 64 cols will be arranged. The default `permutation_mnk = (128, 128, 64)` gives this MMA Layout
+`(warpM, warpN, 1)` are warp tiling dimentions, there will be `warmM` warps in M dimention and `warpN` warps in N dimention. Then there is `permutation_mnk` it is the complete tile size on which this MMA Op will work. To make things clear assume `permutation_mnk` is (128, 128, 64) so all involved warps will work on this massive tile, and a warp tiling of (2, 2, 1) means each warp will work on 64 cols and 64 rows. BUT this is just tip of the iceberg, you can do far more complex things with `permutation_mnk` it accepts cute.layout in each dimention where you can specify the arrange ment of how those 64 rows and 64 cols will be arranged. Default `permutation_mnk = (128, 128, 64)` gives this MMA Layout
 
 // show layout of MMA Layout
 
-But lets say you want all the columns in the C matrix to be contiguos per thread to perform contiguous stores in that case you can modify the `permutation_mnk` to be 
+But lets say you want all columns in C matrix to be contiguos per thread to perform contiguous stores in that case you can modify `permutation_mnk` to be
 
 // derive the new permutation_mnk
 
-You can build super complex MMA Layouts using `permutation_mnk` this github thread [] has a great explanation and discussion about `permutation_mnk`. 
-
-
+You can build super complex MMA Layouts using `permutation_mnk` this github thread [] has a great explanation and discussion about `permutation_mnk`.
 
 ## Profiling
 
-Profiling is where most of the kernel-development time goes. Modal does not support profiling with `nsight-compute`, so you can use `lightning.ai` instead. Before profiling, compile the CuTe DSL kernels with `os.environ["CUTEDSL_EXPORT_LINEINFO"] = "1"` to preserve the source mappings for SASS and PTX. In the source view, place the source on the left and the PTX on the right.
+Profiling is where most of the kernel-development time goes. Modal does not support profiling with `nsight-compute`, for that I used [Lightning AI](https://lightning.ai/). Before profiling, compile the CuTe DSL kernels with `os.environ["CUTEDSL_EXPORT_LINEINFO"] = "1"` to preserve the source mappings for SASS and PTX. In the source view, place the source on the left and the PTX on the right.
 
 ### Bank Conflicts
 
-Bank conflicts are one of the most valuable sources of low-cost performance improvements. There are already great posts on bank conflicts <cite them> that are worth reading. In Nsight Compute, use PM Sampling (Ampere+) in the `L1 Hit Miss` section to inspect the distribution of bank conflicts across the kernel timeline.
+There are already great posts on bank conflicts if you are new to this topic and a pre requisite before moving ahead. For the matmul operands, bank conflicts are removed by applying `Swizzle<3, 4, 3>` layout to input tensors which applys a 128B swizzle with 16B granularity and is supported by TMA for in-flight swizzle. The output tensor from matmul has extra padding of 16B to prevent bank conflicts while storing. For attention the same `Swizzle<3, 4, 3>` pattern is applied, rest there are no excessive bank conflicts in RMSNorm.
+To identify bank conflicts in Nsight Compute, use PM Sampling (Ampere+) in the `L1 Hit Miss` section to inspect the distribution of bank conflicts across the kernel timeline.
 
-![Bank Conflicts Timeline](/assets/img/megakernels/bank_conflicts.svg)
+![Bank Conflicts Timeline](/assets/img/megakernels/bank_conflicts.png)
 
-Recent versions of Nsight Compute also include the `Function Stats Window`. Select the timeline region where conflicts occur, and the window highlights the source lines responsible for most of the instructions in that region. Then open the `Source` tab and look for locations where `L1 Shared Excessive Wavefronts` is above 0%; this directly indicates bank conflicts.
+Recent versions of Nsight Compute also include the `Function Stats Window`. Select the timeline region where conflicts occur, and the window highlights the source lines responsible for most of the instructions in that region you can directly jump onto those instructions or you can open the `Source` tab and look for code where `L1 Shared Excessive Wavefronts` is more than 0%, this directly indicates bank conflicts.
 
-### Vectorized Memory Operations
+### Additional things to look for
 
-Inspect the LDG instructions to verify where `cute.autovec_copy` uses the newer 256B memory operations.
-
-### Spin-Loop Scheduling
-
-In the atomic spin-lock polling loop, `ptxas` automatically introduced a `yield` instruction. It deprioritizes the current warp while the warp waits for the counter to reach the required value, so the scheduler does not waste resources on it.
-
-### Compute and Memory Throughput
-
-Inspect both compute and memory throughput. Very high memory throughput can indicate poor L2-cache reuse—which is why state-of-the-art matmul kernels use L2-cache-aware tiling—or a memory-bound operation. This kernel is compute-bound, so increased compute throughput directly improves performance.
-
-### Register Pressure and Spills
-
-Avoid register spills. Spilled registers are stored in local memory, which resides in DRAM and can severely bottleneck execution. Although PTX 9.0 provides an option to spill registers to shared memory, avoiding spills is still preferable. For example, directly loading the other tensor from global memory into registers in the SiLU epilogue caused excessive spilling; tiling the operation reduced register pressure. In the SASS view, search for `LDL` and `STL` instructions, which load from and store to local memory.
-
-### Warp State Statistics
-
-Use `Warp State Statistics` to understand the average state of each warp. In this kernel, four of eight warps are intentionally sleeping, so a spike in `Stall Sleeping` is expected. Ignore that expected behavior and focus on `Stall Math Pipe Throttle`, which means the warps are waiting on compute instructions—a positive sign here because the tensor and CuTe cores are heavily utilized. `Stall Long Scoreboard` and `Stall Short Scoreboard` indicate waits on global-memory and shared-memory operations, respectively. For more background on scoreboarding and instruction dependencies, see the Modal GPU Glossary <cite here>.
-
-### Instruction Overlap and Barriers
-
-The SASS view also shows how `ptxas` overlaps tensor-core instructions with register-load instructions to hide latency. Introducing `__syncthreads()`, `bar.sync`, or another barrier forces the compiler to complete prior work before proceeding, which can significantly reduce overlap between the current and next operations. A poorly placed barrier can even cause register spills by preventing the compiler from overlapping instructions.
-
-### Global-Memory Coalescing
-
-A high `L2 Theoretical Sectors Global Excessive` value on the `Details` page indicates that global loads are not coalesced efficiently. Improve the access pattern to use the available memory bandwidth more effectively.
-
-These metrics are usually sufficient to optimize a kernel. If you need to understand the complete execution flow, go one level deeper with intrakernel profiling.
+- Inspect the LDG instructions to verify where `cute.autovec_copy` uses the newer 256B memory operations.
+- In the atomic spin-lock polling loop, `ptxas` automatically introduced a `yield` instruction. It deprioritizes the current warp as soon as it hits the `yield` instruction because the compiler automatically determined that it should not waste its resources for spin lock counter.
+- Inspect both compute and memory throughput. Very high memory throughput can indicate poor L2-cache reuse or memory-bound operation which is why state-of-the-art matmul kernels use L2-cache-aware tiling. This kernel is compute-bound, so increased compute throughput directly improves performance.
+- Avoid register spills. Spilled registers are stored in local memory, which resides in DRAM and can severely bottleneck execution. Although PTX 9.0 provides an option to spill registers to shared memory, avoiding spills is still preferable. For example, directly loading the other tensor from global memory into registers in the SiLU epilogue caused excessive spilling therefore I manually introduced a minibatch instead of loading the complete tile all at once. In the SASS view, search for `LDL` and `STL` instructions to see exactly where the registers are spilled.
+- A high `L2 Theoretical Sectors Global Excessive` value on the `Details` page indicates that global loads are not coalesced efficiently. Improve the access pattern to use the available memory bandwidth more effectively. (`permutation_mnk` layouts can be used in matmul atoms for to store matmul outputs in contiguos format which can decrease this metric)
+- Use `Warp State Statistics` to understand the average state of each warp. In this kernel, four of eight warps are intentionally sleeping, so a spike in `Stall Sleeping` is expected. Ignore that expected behavior and focus on `Stall Math Pipe Throttle`, which means the warps are waiting on compute instructions a positive sign here because the tensor and CuTe cores are heavily utilized. `Stall Long Scoreboard` and `Stall Short Scoreboard` indicate waits on global-memory and shared-memory operations, respectively. For more background on scoreboarding and instruction dependencies, see the Modal GPU Glossary <cite here>.
+- Since we are performing TMA operations which run in `async proxy` the writes and reads are not directly visible to `global proxy` so if we perform a TMA write on global memory which is to be referenced by other SMs we need to add `fence_proxy_async_global()` after the `cp.async.bulk.wait_group()` instructions to make sure that TMA writes are visible to all SMs before incrementing the atomic counter.
+- The SASS view also shows how `ptxas` overlaps tensor core instructions with register load instructions to hide latency. Introducing `__syncthreads()`, `bar.sync`, or another barrier forces the compiler to complete prior work before proceeding, which can significantly reduce overlap between the current and next operations. A poorly placed barrier can even cause register spills by preventing the compiler from overlapping instructions. Especially in attention operation where we need to `__syncthreads()` after LDGSTS copies if you enter too many of `__syncthreads()` then it will increase register usage only use it when necessary.
 
 ### Intrakernel Profiling
 
-Intrakernel profiling is especially useful for deep asynchronous pipelines. Sample the per-SM `clock64` register and write the values to global memory as the kernel runs. Sample at the beginning and end of each pipeline stage, then export the data to a Perfetto trace. At the start of the kernel, also sample `globalTimer` for synchronization because `clock64` is not necessarily synchronized across SMs.
+Intrakernel profiling is useful for visualizing asynchronous pipelines. Sample the per-SM `%clock64` register and write the values to global memory as kernel runs. Sample at the beginning and end of each pipeline stage, then export the data to a Perfetto trace. At the start of the kernel, also sample `%globalTimer` for synchronization because `%clock64` is not necessarily synchronized across SMs.
 
-The next part will cover applying this strategy to an actual decode kernel for real models and building a single-user inference server.
+### Benchmarking
 
 ## References
 
-1. <a id="ref-modal-gpu-glossary"></a>Modal. “GPU Glossary.” *Modal*. [https://modal.com/gpu-glossary](https://modal.com/gpu-glossary)
+1. <a id="ref-modal-gpu-glossary"></a>Modal. “GPU Glossary.” _Modal_. [https://modal.com/gpu-glossary](https://modal.com/gpu-glossary)
 2. <a id="ref-yang-cute-copy"></a>Yifan Yang. “CuTe Copy.” [https://yang-yifan.github.io/blogs/cute_copy/cute_copy.html](https://yang-yifan.github.io/blogs/cute_copy/cute_copy.html)

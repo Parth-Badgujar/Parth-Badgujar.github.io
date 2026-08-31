@@ -56,8 +56,6 @@ pagination:
   </div>
   {% endif %}
 
-
-
   <ul class="post-list">
 
     {% if page.pagination.enabled %}
