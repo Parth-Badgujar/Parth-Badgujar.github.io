@@ -274,14 +274,6 @@ ul#tabs a {
   transition: 200ms ease !important;
 }
 
-
-.btn-sm {
-  font-size: inherit;
-  font-weight: normal;
-  height: inherit;
-  line-height: inherit;
-}
-
 button.close {
   border: 0px none;
   font-family: sans-serif;
@@ -428,7 +420,6 @@ h1,
 h2,
 h3,
 h4,
-h5,
 pre,
 code,
 form,
