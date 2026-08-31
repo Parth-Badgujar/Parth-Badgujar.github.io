@@ -101,6 +101,10 @@ jobs:
         run: |
           npm install -g purgecss
           purgecss -c purgecss.config.js
+      - name: Disable Jekyll on the published output 🚫
+        # _site is already fully built; without this GitHub Pages runs its own
+        # Jekyll over it, which cannot resolve this repo's al_folio_* gems.
+        run: touch _site/.nojekyll
       - name: Deploy 🚀
         if: github.event_name != 'pull_request'
         uses: JamesIves/github-pages-deploy-action@v4

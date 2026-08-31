@@ -69,19 +69,16 @@ jobs:
       - name: Run style contract lint 🧷
         run: npm run lint:style-contract
 
+      # The upstream comments/distill integration tests assert that al-folio's
+      # example posts (blog/2022/giscus-comments, blog/2021/distill) exist. This
+      # site has removed that demo content, so those two steps are not run here.
       - name: Install build prerequisites 🔧
         run: |
           sudo apt-get update && sudo apt-get install -y imagemagick
           pip3 install --upgrade nbconvert
 
-      - name: Run comments integration test 🧪
-        run: bash test/integration_comments.sh
-
       - name: Run plugin toggle integration test 🔌
         run: bash test/integration_plugin_toggles.sh
-
-      - name: Run distill integration test 📄
-        run: bash test/integration_distill.sh
 
       - name: Run bootstrap compatibility integration test 🧩
         run: bash test/integration_bootstrap_compat.sh
