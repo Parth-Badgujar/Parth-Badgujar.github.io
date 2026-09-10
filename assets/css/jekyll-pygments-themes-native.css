@@ -65,7 +65,10 @@
 } /* Generic.Traceback */ /* Keyword.Constant */ /* Keyword.Declaration */
 .highlight .kn {
   color: #ff7b72;
-} /* Keyword.Namespace */ /* Keyword.Pseudo */ /* Keyword.Reserved */ /* Keyword.Type */ /* Literal.Date */
+} /* Keyword.Namespace */ /* Keyword.Pseudo */ /* Keyword.Reserved */ /* Keyword.Type */
+.highlight .ld {
+  color: #a5d6ff;
+} /* Literal.Date */
 .highlight .m {
   color: #79c0ff;
 } /* Literal.Number */
