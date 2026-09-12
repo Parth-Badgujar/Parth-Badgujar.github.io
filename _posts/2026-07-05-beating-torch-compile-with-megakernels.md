@@ -15,7 +15,7 @@ _Prior NVIDIA GPU related knowledge is needed before going through this blog. If
 
 ## Intro to Megakernels and Why Megakernels ?
 
-Normally, when you run a PyTorch model without optimizations, it runs in `eager` mode, which means each operation is dispatched to the GPU sequentially. Adding optimizations like `torch.compile` performs operator fusion, reducing the number of kernel launches and improving data reuse. However, you still have multiple kernel launches in a single forward pass. In megakernels, the goal is to fuse all operations into a `single` kernel launch.
+Normally, when you run a PyTorch model without optimizations, it runs in `eager` mode, which means each operation is dispatched to the GPU sequentially. Adding optimizations like `torch.compile` performs operator fusion, reducing the number of kernel launches and improving data reuse. However, you still have multiple kernel launches in a single forward pass. In megakernels, the goal is to fuse all operations into a `single` kernel launch. Its easy to get high tokens/s in memory bound single-batch decode megakernel but this one will be focusing more on the compute bound megakernel.
 
 In the current GPU execution model, on actual hardware, you have a limited set of `SMs (Streaming Multiprocessors)` on which kernel blocks are scheduled based on the hardware resources each block uses. We'll first devise strategies for designing the megakernel.
 
