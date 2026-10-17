@@ -675,7 +675,7 @@ Same story on a different axis: +7.5% over inductor at `embed_dim=1280` on the 5
 The megakernel is fastest in all 16 configs on the 5070 Ti and in 14 of 16 on the PRO 6000, losing only at `seq=4096` and `layers=1` and by under 1.5% in both. The margin over eager is 9-29% on the 5070 Ti and 15-51% on the PRO 6000. It is largest exactly where per-op overhead would otherwise dominate and narrows as the workload becomes compute bound which is expected as the kernel does not make the tensor cores faster, it removes the launch and memory-roundtrip cost that `torch.compile` and eager still pay between every operator.
 
 ## Next Up
-The code for all of the above can be found on [github.com/Parth-Badgujar/transformer-megakernel](github.com/Parth-Badgujar/transformer-megakernels/). This was a make shift implementation which cannot be used for actual LLM ops, I am currently working on a decode only megakernel for the latest architectures which also have linear attention and mixture-of-experts.
+The code for all of the above can be found on [github.com/Parth-Badgujar/transformer-megakernels](https://github.com/Parth-Badgujar/transformer-megakernels). This was a make shift implementation which cannot be used for actual LLM ops, I am currently working on a decode only megakernel for the latest architectures which also have linear attention and mixture-of-experts.
 
 ## References
 
